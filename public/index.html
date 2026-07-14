@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Torneo de Cel — ¿a qué nivel está tu cel hoy?</title>
+<meta name="description" content="Micro-arcade 8-bit: penales y survivor de aliens en partidas de 30 segundos. Compite en el leaderboard mundial y comparte tu score card.">
+<meta name="theme-color" content="#0d0d1a">
+<meta property="og:title" content="Torneo de Cel">
+<meta property="og:description" content="Partidas de 30 segundos. Gloria eterna. ¿A qué nivel está tu cel hoy?">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ============ PANTALLA: MENU ============ -->
+  <section id="screen-menu" class="screen active">
+    <h1 class="logo">TORNEO<br>DE CEL</h1>
+    <p class="tagline">Partidas de 30 segundos. Gloria eterna.</p>
+
+    <div class="profile-box">
+      <input id="inp-nickname" maxlength="12" placeholder="Tu nickname" autocomplete="off">
+      <div class="profile-row">
+        <input id="inp-country" maxlength="2" placeholder="MX" autocomplete="off">
+        <input id="inp-handle" maxlength="20" placeholder="@tu_insta (opcional)" autocomplete="off">
+      </div>
+    </div>
+
+    <div class="menu-buttons">
+      <button id="btn-penales" class="btn btn-big">&#9917; PENALES</button>
+      <button id="btn-survivor" class="btn btn-big">&#128126; SURVIVOR</button>
+      <button id="btn-leaderboard" class="btn">&#127942; LEADERBOARD</button>
+    </div>
+
+    <div class="best-scores">
+      <span id="best-penales">Mejor Penales: 0</span>
+      <span id="best-survivor">Mejor Survivor: 0</span>
+    </div>
+  </section>
+
+  <!-- ============ PANTALLA: SELECCIÓN DE JUGADOR (penales) ============ -->
+  <section id="screen-select" class="screen">
+    <h2>ELIGE TU JUGADOR</h2>
+    <div id="card-grid" class="card-grid"></div>
+    <p class="stat-legend">POT potencia &middot; PRE precisi&oacute;n &middot; SER serenidad &middot; PIC picard&iacute;a</p>
+    <button id="btn-select-back" class="btn">&larr; Men&uacute;</button>
+  </section>
+
+  <!-- ============ PANTALLA: JUEGO (canvas compartido) ============ -->
+  <section id="screen-game" class="screen">
+    <button id="btn-quit" class="btn btn-small btn-quit" title="Salir">&#10005;</button>
+    <canvas id="game-canvas" width="360" height="640"></canvas>
+  </section>
+
+  <!-- ============ PANTALLA: LEADERBOARD ============ -->
+  <section id="screen-leaderboard" class="screen">
+    <h2>&#127942; LEADERBOARD</h2>
+    <div class="tabs" id="tabs-mode">
+      <button data-mode="penales" class="tab active">Penales</button>
+      <button data-mode="survivor" class="tab">Survivor</button>
+      <button data-mode="total" class="tab">Total</button>
+    </div>
+    <div class="tabs" id="tabs-range">
+      <button data-range="daily" class="tab">Hoy</button>
+      <button data-range="weekly" class="tab">Semana</button>
+      <button data-range="alltime" class="tab active">Hist&oacute;rico</button>
+    </div>
+    <div id="leaderboard-list" class="lb-list">Cargando&hellip;</div>
+    <button id="btn-lb-back" class="btn">&larr; Men&uacute;</button>
+  </section>
+
+  <!-- ============ PANTALLA: GAME OVER + SCORE CARD ============ -->
+  <section id="screen-gameover" class="screen">
+    <h2 id="go-title">FIN DE PARTIDA</h2>
+    <div id="go-summary" class="go-summary"></div>
+    <p id="go-flavor" class="go-flavor"></p>
+    <canvas id="card-canvas"></canvas>
+    <div class="menu-buttons">
+      <button id="btn-download-card" class="btn">&#128248; Descargar Score Card</button>
+      <button id="btn-retry" class="btn btn-big">&#128260; Otra vez</button>
+      <button id="btn-go-menu" class="btn">&larr; Men&uacute;</button>
+    </div>
+  </section>
+
+</div>
+
+<!-- Orden importa: leaderboard.js define TDCStorage/tdcUUID que usan los demás -->
+<script src="js/leaderboard.js"></script>
+<script src="js/players.js"></script>
+<script src="js/share.js"></script>
+<script src="js/penales.js"></script>
+<script src="js/survivor.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>
