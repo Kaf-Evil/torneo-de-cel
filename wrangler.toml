@@ -1,0 +1,10 @@
+# TORNEO DE CEL — configuración de Cloudflare Pages + D1
+name = "torneo-de-cel"
+compatibility_date = "2026-07-01"
+pages_build_output_dir = "public"
+
+# Base de datos D1
+[[d1_databases]]
+binding = "DB"
+database_name = "torneo-de-cel-db"
+database_id = "9adea087-1b29-4cdb-880a-4c826cf25212"

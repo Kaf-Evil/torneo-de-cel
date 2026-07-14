@@ -1,0 +1,6 @@
+node_modules/
+.wrangler/
+nohup.out
+test/*.png
+*.log
+.DS_Store
