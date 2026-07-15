@@ -1,19 +1,19 @@
 /* ============================================================
- * TORNEO DE CEL — survivor.js (v0.4 "neon edition")
- * Aliens 8-bit en oleadas con:
- *  - Chips de energía: los aliens los sueltan al morir y hay que
- *    RECOGERLOS para subir de arma → moverse importa.
- *  - Apuntado manual con mouse en desktop (crosshair + boost al
- *    mantener clic). En touch: joystick + auto-aim al más cercano.
- *  - Paleta neón que cambia con cada stage + flash de transición.
- *  - Sprites pixel-art animados con glow pre-horneado, estela del
- *    jugador, partículas de muerte y screen shake.
+ * TORNEO DE CEL — survivor.js (v0.5 "arsenal edition")
+ * Novedades sobre la v0.4 neón:
+ *  - Alien SHOOTER (stage 3+): mantiene distancia, te dispara
+ *    proyectiles; sus balas se esquivan o se bloquean con escudo.
+ *  - ITEMS: los aliens sueltan drops además de chips:
+ *      escudo (+1 carga, máx 3, bloquea un golpe cada una)
+ *      botiquín (+25 vida) · rapid fire (8 s de cadencia doble)
+ *      bomba (limpia enemigos y balas cercanas) · caja de arma
+ *      (sube el nivel de arma al instante). El tank siempre
+ *      suelta un item.
  *
  * Estructuras:
- *  player  = { x, y, r, hp, maxHp, speed, iTimer }
- *  enemy   = { x, y, r, hp, type, speed, zigT, animT }
- *  bullet  = { x, y, vx, vy, r }
- *  chip    = { x, y, vx, vy, ttl }
+ *  enemy   = { x, y, r, hp, type, speed, zigT, animT, fireT?, strafeDir? }
+ *  ebullet = { x, y, vx, vy, r }          (balas enemigas)
+ *  item    = { x, y, vx, vy, ttl, type }
  * ============================================================ */
 
 'use strict';
@@ -27,12 +27,23 @@ class SurvivorGame {
     this.H = 640;
 
     this.ENEMY_TYPES = {
-      grunt:  { hp: 1, speed: 42, r: 10, score: 10, minStage: 1 },
-      runner: { hp: 1, speed: 78, r: 8,  score: 15, minStage: 2, zigzag: true },
-      tank:   { hp: 4, speed: 24, r: 16, score: 40, minStage: 4 }
+      grunt:   { hp: 1, speed: 42, r: 10, score: 10, minStage: 1 },
+      runner:  { hp: 1, speed: 78, r: 8,  score: 15, minStage: 2, zigzag: true },
+      shooter: { hp: 2, speed: 55, r: 9,  score: 25, minStage: 3, ranged: true },
+      tank:    { hp: 4, speed: 24, r: 16, score: 40, minStage: 4 }
     };
     this.STAGE_SECONDS = 15;
     this.COMBO_WINDOW = 2.5;
+
+    /* Tabla de drops de items (pesos) */
+    this.ITEM_TABLE = [
+      { type: 'med',    w: 28 },
+      { type: 'shield', w: 28 },
+      { type: 'rapid',  w: 22 },
+      { type: 'nuke',   w: 12 },
+      { type: 'crate',  w: 10 }
+    ];
+    this.ITEM_DROP_CHANCE = 0.07; // por kill normal (tank: 100%)
 
     /* ---- Temas neón: uno por stage, rotan ---- */
     this.THEMES = [
@@ -43,7 +54,7 @@ class SurvivorGame {
       { bg: '#0b0b1c', grid: 'rgba(200,220,255,0.12)', accent: '#c8dcff', name: 'GHOST' }
     ];
 
-    /* ---- Sprites 8-bit: strings por fila (0=vacío, letra=color), 2 frames ---- */
+    /* ---- Sprites 8-bit (0=vacío, letra=color), 2 frames ---- */
     this.SPRITE_DEFS = {
       grunt: {
         palette: { a: '#3fff8e', b: '#0d7a3c', c: '#eaffef' },
@@ -59,6 +70,14 @@ class SurvivorGame {
         frames: [
           ['00aaaa00', '0aaccaa0', 'aaaaaaaa', '0a0aa0a0', '00a00a00', '0a0000a0'],
           ['00aaaa00', '0aaccaa0', 'aaaaaaaa', '00aaaa00', '0a0aa0a0', 'a00aa00a']
+        ]
+      },
+      shooter: {
+        palette: { a: '#b26eff', b: '#4a0d7a', c: '#ffe1ff', d: '#ff3f6e' },
+        glow: '#b26eff',
+        frames: [
+          ['000aa000', '00aaaa00', '0acaaca0', '0aaaaaa0', 'aa0dd0aa', '0a0dd0a0', '00a00a00', '0a0000a0'],
+          ['000aa000', '00aaaa00', '0acaaca0', '0aaaaaa0', 'aa0dd0aa', '0a0dd0a0', '0a0aa0a0', 'a000000a']
         ]
       },
       tank: {
@@ -77,6 +96,20 @@ class SurvivorGame {
           ['00aaaa00', '0aaaaaa0', '0abbbba0', '0aaaaaa0', '0caaaac0', 'ccaaaacc', '0caaaac0', '0c0000c0']
         ]
       }
+    };
+
+    /* ---- Iconos de items (8x8) ---- */
+    this.ITEM_DEFS = {
+      med:    { glow: '#3fff8e', palette: { a: '#ffffff', b: '#ff3f6e' },
+                grid: ['0bbbbbb0','bbbaabbb','bbbaabbb','baaaaaab','baaaaaab','bbbaabbb','bbbaabbb','0bbbbbb0'] },
+      shield: { glow: '#3fd2ff', palette: { a: '#3fd2ff', b: '#bfeaff' },
+                grid: ['0aaaaaa0','abbbbbba','abbbbbba','abbbbbba','0abbbba0','0abbbba0','00abba00','000aa000'] },
+      rapid:  { glow: '#ffd23f', palette: { a: '#ffd23f', b: '#fff7d0' },
+                grid: ['0000ba00','000baa00','00baa000','0baaaa00','00aaab00','000ab000','00ab0000','0ab00000'] },
+      nuke:   { glow: '#ff9f3f', palette: { a: '#ff9f3f', b: '#3a3a4a', c: '#fff7d0' },
+                grid: ['0000c000','000ca000','00bbbb00','0bbbbbb0','bbbabbbb','bbbbbbbb','0bbbbbb0','00bbbb00'] },
+      crate:  { glow: '#b26eff', palette: { a: '#b26eff', b: '#e1c8ff' },
+                grid: ['aaaaaaaa','a00bb00a','a0bbbb0a','abb00bba','a00bb00a','a00bb00a','a000000a','aaaaaaaa'] }
     };
   }
 
@@ -109,7 +142,9 @@ class SurvivorGame {
     this.player = { x: this.W / 2, y: this.H / 2, r: 10, hp: 100, maxHp: 100, speed: 145, iTimer: 0 };
     this.enemies = [];
     this.bullets = [];
+    this.ebullets = [];
     this.chips = [];
+    this.items = [];
     this.particles = [];
     this.trail = [];
     this.time = 0;
@@ -130,6 +165,13 @@ class SurvivorGame {
     this.chipsCollected = 0;
     this.chipsTotal = 0;
     this.weaponFlash = 0;
+    this.shield = 0;
+    this.rapidT = 0;
+    this.itemsTotal = 0;
+    this.pickupMsg = '';
+    this.pickupT = 0;
+    this.nukeFx = null;
+    this._nukeActive = false;
     this.state = 'play';
     this.overT = 0;
     this._reported = false;
@@ -144,32 +186,37 @@ class SurvivorGame {
     return this.THEMES[(this.stage - 1) % this.THEMES.length];
   }
 
-  /* ---- Pre-hornea sprites con glow en canvases (drawImage barato) ---- */
+  /* ---- Pre-hornea sprites con glow (drawImage barato) ---- */
   _bakeSprites() {
-    this.sprites = {};
-    const PX = { grunt: 2.6, runner: 2.4, tank: 3.4, player: 2.8 };
-    for (const [name, def] of Object.entries(this.SPRITE_DEFS)) {
-      const px = PX[name];
-      this.sprites[name] = def.frames.map((rows) => {
-        const pad = 10;
-        const c = document.createElement('canvas');
-        c.width = Math.ceil(rows[0].length * px) + pad * 2;
-        c.height = Math.ceil(rows.length * px) + pad * 2;
-        const g = c.getContext('2d');
-        g.shadowColor = def.glow;
-        g.shadowBlur = 7;
-        rows.forEach((row, y) => {
-          for (let x = 0; x < row.length; x++) {
-            const ch = row[x];
-            if (ch === '0') continue;
-            g.fillStyle = def.palette[ch] || def.palette.a;
-            g.fillRect(pad + x * px, pad + y * px, px + 0.5, px + 0.5);
-          }
-        });
-        return c;
+    const bake = (rows, palette, glow, px) => {
+      const pad = 10;
+      const c = document.createElement('canvas');
+      c.width = Math.ceil(rows[0].length * px) + pad * 2;
+      c.height = Math.ceil(rows.length * px) + pad * 2;
+      const g = c.getContext('2d');
+      g.shadowColor = glow;
+      g.shadowBlur = 7;
+      rows.forEach((row, y) => {
+        for (let x = 0; x < row.length; x++) {
+          const ch = row[x];
+          if (ch === '0') continue;
+          g.fillStyle = palette[ch] || palette.a;
+          g.fillRect(pad + x * px, pad + y * px, px + 0.5, px + 0.5);
+        }
       });
+      return c;
+    };
+
+    this.sprites = {};
+    const PX = { grunt: 2.6, runner: 2.4, shooter: 2.5, tank: 3.4, player: 2.8 };
+    for (const [name, def] of Object.entries(this.SPRITE_DEFS)) {
+      this.sprites[name] = def.frames.map((rows) => bake(rows, def.palette, def.glow, PX[name]));
     }
-    // Bala neón
+    this.itemSprites = {};
+    for (const [name, def] of Object.entries(this.ITEM_DEFS)) {
+      this.itemSprites[name] = bake(def.grid, def.palette, def.glow, 2.2);
+    }
+    // Bala del jugador
     const b = document.createElement('canvas');
     b.width = b.height = 18;
     const bg = b.getContext('2d');
@@ -178,7 +225,18 @@ class SurvivorGame {
     bg.fillStyle = '#fff7d0';
     bg.fillRect(6, 6, 6, 6);
     this.bulletSprite = b;
-    // Chip de energía (diamante)
+    // Bala enemiga (roja, distinta a todo)
+    const eb = document.createElement('canvas');
+    eb.width = eb.height = 18;
+    const ebg = eb.getContext('2d');
+    ebg.shadowColor = '#ff3f6e';
+    ebg.shadowBlur = 8;
+    ebg.fillStyle = '#ff8fae';
+    ebg.beginPath();
+    ebg.arc(9, 9, 3.5, 0, Math.PI * 2);
+    ebg.fill();
+    this.ebulletSprite = eb;
+    // Chip de energía
     const ch = document.createElement('canvas');
     ch.width = ch.height = 20;
     const cg = ch.getContext('2d');
@@ -193,10 +251,7 @@ class SurvivorGame {
     this.chipSprite = ch;
   }
 
-  /* ---------------- Input ----------------
-   * Touch → joystick flotante + auto-aim al alien más cercano.
-   * Mouse → apuntas con el cursor (crosshair); mantener clic
-   *         acelera la cadencia (boost). WASD/flechas mueven.  */
+  /* ---------------- Input (igual que v0.4) ---------------- */
   _bindInput() {
     this._onKeyDown = (e) => { this.keys[e.key.toLowerCase()] = true; };
     this._onKeyUp = (e) => { this.keys[e.key.toLowerCase()] = false; };
@@ -274,7 +329,7 @@ class SurvivorGame {
     return { x: 0, y: 0 };
   }
 
-  /* ---------------- Dificultad ---------------- */
+  /* ---------------- Dificultad y spawning ---------------- */
 
   _spawnInterval() {
     return Math.max(0.25, 1.15 * Math.pow(0.87, this.stage - 1));
@@ -286,8 +341,9 @@ class SurvivorGame {
 
   _pickEnemyType() {
     const roll = Math.random();
-    if (this.stage >= 4 && roll < 0.15) return 'tank';
-    if (this.stage >= 2 && roll < 0.45) return 'runner';
+    if (this.stage >= 4 && roll < 0.12) return 'tank';
+    if (this.stage >= 3 && roll < 0.30) return 'shooter';
+    if (this.stage >= 2 && roll < 0.60) return 'runner';
     return 'grunt';
   }
 
@@ -307,13 +363,13 @@ class SurvivorGame {
       hp: spec.hp,
       speed: spec.speed * this._speedFactor(),
       zigT: Math.random() * Math.PI * 2,
-      animT: Math.random()
+      animT: Math.random(),
+      fireT: 1 + Math.random() * 1.5,
+      strafeDir: Math.random() < 0.5 ? 1 : -1
     });
   }
 
-  /* ---------------- Arma ----------------
-   * Sube SOLO recogiendo chips: nv2 más rápido · nv3 doble cañón ·
-   * nv4 más rápido · nv5+ triple abanico. Boost con clic sostenido. */
+  /* ---------------- Arma del jugador ---------------- */
 
   _chipsNeeded() {
     return 8 + 4 * (this.weaponLv - 1);
@@ -321,7 +377,10 @@ class SurvivorGame {
 
   _fireInterval() {
     const base = 0.34 * Math.pow(0.88, this.weaponLv - 1);
-    return Math.max(0.12, base) * (this.boost ? 0.72 : 1);
+    let interval = Math.max(0.12, base);
+    if (this.boost) interval *= 0.72;
+    if (this.rapidT > 0) interval *= 0.55; // item rapid fire
+    return Math.max(0.07, interval);
   }
 
   _aimVector() {
@@ -330,7 +389,6 @@ class SurvivorGame {
       const d = Math.hypot(this.aim.x - p.x, this.aim.y - p.y) || 1;
       return { x: (this.aim.x - p.x) / d, y: (this.aim.y - p.y) / d };
     }
-    // Auto-aim (touch): alien más cercano en rango
     let target = null, bestD = 420;
     for (const e of this.enemies) {
       const d = Math.hypot(e.x - p.x, e.y - p.y);
@@ -362,11 +420,44 @@ class SurvivorGame {
     }
     for (const s of shots) {
       const cos = Math.cos(s.ang), sin = Math.sin(s.ang);
-      const vx = (a.x * cos - a.y * sin) * SPEED;
-      const vy = (a.x * sin + a.y * cos) * SPEED;
-      this.bullets.push({ x: p.x + s.ox, y: p.y + s.oy, vx, vy, r: 3.5 });
+      this.bullets.push({
+        x: p.x + s.ox, y: p.y + s.oy,
+        vx: (a.x * cos - a.y * sin) * SPEED,
+        vy: (a.x * sin + a.y * cos) * SPEED,
+        r: 3.5
+      });
     }
   }
+
+  /* ---------------- Daño al jugador (escudo → vida) ---------------- */
+  _hitPlayer(srcX, srcY) {
+    const p = this.player;
+    if (p.iTimer > 0) return;
+    this.noDamageT = 0;
+    this.combo = 0;
+    this.shakeT = 0.35;
+    if (this.shield > 0) {
+      this.shield--;
+      p.iTimer = 0.5;
+      this.pickupMsg = 'ESCUDO -1';
+      this.pickupT = 0.8;
+      return;
+    }
+    p.hp -= 10;
+    p.iTimer = 0.8;
+    if (p.hp <= 0) {
+      p.hp = 0;
+      this.state = 'over';
+      this.overT = 0;
+      const final = Math.floor(this.score);
+      if (final > this.best) {
+        this.best = final;
+        TDCStorage.set('tdc_best_survivor', this.best);
+      }
+    }
+  }
+
+  /* ---------------- Kills, chips e items ---------------- */
 
   _killEnemy(index) {
     const e = this.enemies[index];
@@ -378,7 +469,7 @@ class SurvivorGame {
     this.maxCombo = Math.max(this.maxCombo, this.combo);
     const mult = 1 + 0.1 * Math.min(this.combo, 20);
     this.score += spec.score * mult;
-    // Partículas neón del color del alien
+
     const glow = this.SPRITE_DEFS[e.type].glow;
     for (let i = 0; i < 10; i++) {
       const ang = Math.random() * Math.PI * 2;
@@ -389,7 +480,7 @@ class SurvivorGame {
         life: 0.35 + Math.random() * 0.3, c: glow
       });
     }
-    // Chips de energía (el tank suelta 3)
+    // Chips (el tank suelta 3)
     const n = e.type === 'tank' ? 3 : 1;
     for (let i = 0; i < n; i++) {
       const ang = Math.random() * Math.PI * 2;
@@ -399,6 +490,67 @@ class SurvivorGame {
         ttl: 9
       });
     }
+    // Drop de item (suprimido durante la bomba para no inundar)
+    if (!this._nukeActive) {
+      const drop = e.type === 'tank' || Math.random() < this.ITEM_DROP_CHANCE;
+      if (drop && this.items.length < 6) this._spawnItem(e.x, e.y);
+    }
+  }
+
+  _spawnItem(x, y) {
+    let total = 0;
+    for (const it of this.ITEM_TABLE) total += it.w;
+    let r = Math.random() * total;
+    let type = 'med';
+    for (const it of this.ITEM_TABLE) {
+      if (r < it.w) { type = it.type; break; }
+      r -= it.w;
+    }
+    const ang = Math.random() * Math.PI * 2;
+    this.items.push({
+      x, y,
+      vx: Math.cos(ang) * 40, vy: Math.sin(ang) * 40,
+      ttl: 10, type
+    });
+  }
+
+  _applyItem(type) {
+    const p = this.player;
+    if (type === 'med') {
+      p.hp = Math.min(p.maxHp, p.hp + 25);
+      this.pickupMsg = '+25 VIDA';
+    } else if (type === 'shield') {
+      this.shield = Math.min(3, this.shield + 1);
+      this.pickupMsg = '+ESCUDO (' + this.shield + '/3)';
+    } else if (type === 'rapid') {
+      this.rapidT = 8;
+      this.pickupMsg = 'RAPID FIRE!';
+    } else if (type === 'crate') {
+      this.weaponLv++;
+      this.weaponFlash = 1.5;
+      this.chipsCollected = 0;
+      this.pickupMsg = 'ARMA NV' + this.weaponLv + '!';
+    } else if (type === 'nuke') {
+      this._detonate();
+      this.pickupMsg = 'BOOM!';
+    }
+    this.itemsTotal++;
+    this.pickupT = 1.5;
+    this.score += 20;
+  }
+
+  /* Bomba: elimina enemigos en radio 150 y limpia balas enemigas */
+  _detonate() {
+    const p = this.player;
+    this.nukeFx = { r: 10, t: 0.5 };
+    this.shakeT = 0.5;
+    this._nukeActive = true;
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
+      const e = this.enemies[i];
+      if (Math.hypot(e.x - p.x, e.y - p.y) < 150) this._killEnemy(i);
+    }
+    this._nukeActive = false;
+    this.ebullets.length = 0;
   }
 
   /* ---------------- Update ---------------- */
@@ -422,7 +574,8 @@ class SurvivorGame {
             maxCombo: this.maxCombo,
             stage: this.stage,
             chips: this.chipsTotal,
-            weaponLv: this.weaponLv
+            weaponLv: this.weaponLv,
+            items: this.itemsTotal
           }
         });
       }
@@ -443,8 +596,14 @@ class SurvivorGame {
     if (this.flashT > 0) this.flashT -= dt;
     if (this.shakeT > 0) this.shakeT -= dt;
     if (this.weaponFlash > 0) this.weaponFlash -= dt;
+    if (this.rapidT > 0) this.rapidT -= dt;
+    if (this.pickupT > 0) this.pickupT -= dt;
+    if (this.nukeFx) {
+      this.nukeFx.t -= dt;
+      this.nukeFx.r += 500 * dt;
+      if (this.nukeFx.t <= 0) this.nukeFx = null;
+    }
 
-    // Stage up → nuevo tema + flash
     const newStage = Math.floor(this.time / this.STAGE_SECONDS) + 1;
     if (newStage > this.stage) {
       this.stage = newStage;
@@ -476,14 +635,14 @@ class SurvivorGame {
       this._spawnEnemy();
     }
 
-    // Autofire (hacia el mouse o auto-aim)
+    // Autofire
     this.fireT += dt;
     while (this.fireT >= this._fireInterval()) {
       this.fireT -= this._fireInterval();
       this._fire();
     }
 
-    // Balas
+    // Balas del jugador
     for (let i = this.bullets.length - 1; i >= 0; i--) {
       const b = this.bullets[i];
       b.x += b.vx * dt;
@@ -493,11 +652,34 @@ class SurvivorGame {
       }
     }
 
-    // Enemigos persiguen (runner con zigzag)
+    // Enemigos: persecución / zigzag / francotirador
     for (const e of this.enemies) {
+      const spec = this.ENEMY_TYPES[e.type];
       const d = Math.hypot(p.x - e.x, p.y - e.y) || 1;
       let vx = (p.x - e.x) / d, vy = (p.y - e.y) / d;
-      if (this.ENEMY_TYPES[e.type].zigzag) {
+
+      if (spec.ranged) {
+        if (d > 170) {
+          // acercarse
+        } else if (d < 120) {
+          vx = -vx; vy = -vy; // retroceder
+        } else {
+          const sx = -vy * e.strafeDir, sy = vx * e.strafeDir;
+          vx = sx; vy = sy;
+        }
+        e.fireT -= dt;
+        if (e.fireT <= 0 && d < 320 && this.ebullets.length < 40) {
+          const bd = Math.hypot(p.x - e.x, p.y - e.y) || 1;
+          const SPEED = 140 + 6 * (this.stage - 1);
+          this.ebullets.push({
+            x: e.x, y: e.y,
+            vx: (p.x - e.x) / bd * SPEED,
+            vy: (p.y - e.y) / bd * SPEED,
+            r: 4
+          });
+          e.fireT = 1.7 + Math.random() * 0.9;
+        }
+      } else if (spec.zigzag) {
         e.zigT += dt * 6;
         const perp = Math.sin(e.zigT) * 0.7;
         const nvx = vx + -vy * perp, nvy = vy + vx * perp;
@@ -509,7 +691,23 @@ class SurvivorGame {
       e.animT += dt;
     }
 
-    // Chips: dispersión, imán y recolección
+    // Balas enemigas → jugador
+    for (let i = this.ebullets.length - 1; i >= 0; i--) {
+      const b = this.ebullets[i];
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      if (b.x < -10 || b.x > this.W + 10 || b.y < -10 || b.y > this.H + 10) {
+        this.ebullets.splice(i, 1);
+        continue;
+      }
+      if (Math.hypot(b.x - p.x, b.y - p.y) < b.r + p.r) {
+        this.ebullets.splice(i, 1);
+        this._hitPlayer(b.x, b.y);
+        if (this.state === 'over') return;
+      }
+    }
+
+    // Chips: imán y recolección
     for (let i = this.chips.length - 1; i >= 0; i--) {
       const c = this.chips[i];
       c.ttl -= dt;
@@ -536,6 +734,26 @@ class SurvivorGame {
       }
     }
 
+    // Items: imán suave y recolección
+    for (let i = this.items.length - 1; i >= 0; i--) {
+      const it = this.items[i];
+      it.ttl -= dt;
+      it.vx *= 0.9; it.vy *= 0.9;
+      const d = Math.hypot(p.x - it.x, p.y - it.y) || 1;
+      if (d < 45) {
+        it.vx += (p.x - it.x) / d * 500 * dt;
+        it.vy += (p.y - it.y) / d * 500 * dt;
+      }
+      it.x += it.vx * dt;
+      it.y += it.vy * dt;
+      if (d < p.r + 8) {
+        this.items.splice(i, 1);
+        this._applyItem(it.type);
+      } else if (it.ttl <= 0) {
+        this.items.splice(i, 1);
+      }
+    }
+
     // Partículas
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const pa = this.particles[i];
@@ -545,7 +763,7 @@ class SurvivorGame {
       if (pa.life <= 0) this.particles.splice(i, 1);
     }
 
-    // Balas ↔ aliens
+    // Balas del jugador ↔ aliens
     for (let i = this.bullets.length - 1; i >= 0; i--) {
       const b = this.bullets[i];
       for (let j = this.enemies.length - 1; j >= 0; j--) {
@@ -559,28 +777,14 @@ class SurvivorGame {
       }
     }
 
-    // Aliens ↔ jugador (i-frames + knockback + shake)
+    // Aliens ↔ jugador (contacto)
     if (p.iTimer <= 0) {
       for (const e of this.enemies) {
         if (Math.hypot(p.x - e.x, p.y - e.y) < p.r + e.r) {
-          p.hp -= 10;
-          p.iTimer = 0.8;
-          this.noDamageT = 0;
-          this.combo = 0;
-          this.shakeT = 0.35;
           const d = Math.hypot(e.x - p.x, e.y - p.y) || 1;
           e.x += (e.x - p.x) / d * 40;
           e.y += (e.y - p.y) / d * 40;
-          if (p.hp <= 0) {
-            p.hp = 0;
-            this.state = 'over';
-            this.overT = 0;
-            const final = Math.floor(this.score);
-            if (final > this.best) {
-              this.best = final;
-              TDCStorage.set('tdc_best_survivor', this.best);
-            }
-          }
+          this._hitPlayer(e.x, e.y);
           break;
         }
       }
@@ -601,7 +805,6 @@ class SurvivorGame {
       ctx.translate((Math.random() - 0.5) * k, (Math.random() - 0.5) * k);
     }
 
-    // Fondo del tema + grid
     ctx.fillStyle = theme.bg;
     ctx.fillRect(-10, -10, W + 20, H + 20);
     ctx.strokeStyle = theme.grid;
@@ -609,7 +812,6 @@ class SurvivorGame {
     for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
     for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
 
-    // Estela del jugador
     for (const t of this.trail) {
       ctx.globalAlpha = t.life * 0.9;
       ctx.fillStyle = theme.accent;
@@ -618,24 +820,25 @@ class SurvivorGame {
     }
     ctx.globalAlpha = 1;
 
-    // Chips (parpadean al expirar)
     for (const c of this.chips) {
       if (c.ttl < 2 && Math.floor(c.ttl * 8) % 2 === 0) continue;
       ctx.drawImage(this.chipSprite, c.x - 10, c.y - 10);
     }
-
-    // Balas
-    for (const b of this.bullets) {
-      ctx.drawImage(this.bulletSprite, b.x - 9, b.y - 9);
+    for (const it of this.items) {
+      if (it.ttl < 2.5 && Math.floor(it.ttl * 8) % 2 === 0) continue;
+      const img = this.itemSprites[it.type];
+      const bob = Math.sin(this.time * 5 + it.x) * 2;
+      ctx.drawImage(img, it.x - img.width / 2, it.y - img.height / 2 + bob);
     }
 
-    // Aliens (2 frames de animación)
+    for (const b of this.bullets) ctx.drawImage(this.bulletSprite, b.x - 9, b.y - 9);
+    for (const b of this.ebullets) ctx.drawImage(this.ebulletSprite, b.x - 9, b.y - 9);
+
     for (const e of this.enemies) {
       const img = this.sprites[e.type][Math.floor(e.animT * 6) % 2];
       ctx.drawImage(img, e.x - img.width / 2, e.y - img.height / 2);
     }
 
-    // Partículas
     for (const pa of this.particles) {
       ctx.globalAlpha = Math.max(0, Math.min(1, pa.life * 2.2));
       ctx.fillStyle = pa.c;
@@ -643,7 +846,19 @@ class SurvivorGame {
     }
     ctx.globalAlpha = 1;
 
-    // Jugador + cañón orientado al aim
+    if (this.nukeFx) {
+      ctx.globalAlpha = Math.max(0, this.nukeFx.t * 2);
+      ctx.strokeStyle = '#ff9f3f';
+      ctx.lineWidth = 6;
+      ctx.shadowColor = '#ff9f3f';
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, this.nukeFx.r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+    }
+
     const blink = p.iTimer > 0 && Math.floor(p.iTimer * 10) % 2 === 0;
     if (!blink) {
       const a = this._aimVector();
@@ -652,15 +867,28 @@ class SurvivorGame {
       ctx.rotate(Math.atan2(a.y, a.x));
       ctx.shadowColor = theme.accent;
       ctx.shadowBlur = 6;
-      ctx.fillStyle = theme.accent;
+      ctx.fillStyle = this.rapidT > 0 ? '#ffd23f' : theme.accent;
       ctx.fillRect(4, -2.5, 14, 5);
       ctx.restore();
-      const mv = this._moveVector();
-      const img = this.sprites.player[(mv.x || mv.y) ? Math.floor(this.time * 8) % 2 : 0];
+      const mv2 = this._moveVector();
+      const img = this.sprites.player[(mv2.x || mv2.y) ? Math.floor(this.time * 8) % 2 : 0];
       ctx.drawImage(img, p.x - img.width / 2, p.y - img.height / 2);
     }
+    if (this.shield > 0) {
+      ctx.strokeStyle = '#3fd2ff';
+      ctx.lineWidth = 2.5;
+      ctx.shadowColor = '#3fd2ff';
+      ctx.shadowBlur = 8;
+      const rot = this.time * 1.5;
+      for (let s = 0; s < this.shield; s++) {
+        const a0 = rot + (s * Math.PI * 2) / 3;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 18, a0, a0 + Math.PI * 2 / 3 - 0.5);
+        ctx.stroke();
+      }
+      ctx.shadowBlur = 0;
+    }
 
-    // Crosshair (solo con mouse)
     if (this.aim.mouse && this.state === 'play') {
       ctx.strokeStyle = theme.accent;
       ctx.lineWidth = 1.5;
@@ -673,7 +901,6 @@ class SurvivorGame {
       ctx.stroke();
     }
 
-    // Joystick virtual (touch)
     if (this.joy.active) {
       ctx.beginPath();
       ctx.arc(this.joy.ox, this.joy.oy, 50, 0, Math.PI * 2);
@@ -686,7 +913,6 @@ class SurvivorGame {
       ctx.fill();
     }
 
-    // Flash de cambio de stage
     if (this.flashT > 0) {
       ctx.globalAlpha = this.flashT * 0.5;
       ctx.fillStyle = theme.accent;
@@ -706,7 +932,7 @@ class SurvivorGame {
       ctx.font = 'bold 36px monospace';
       ctx.fillText('GAME OVER', W / 2, H / 2 - 20);
       ctx.fillStyle = '#fff';
-      ctx.font = 'bold 15px monospace';
+      ctx.font = 'bold 14px monospace';
       ctx.fillText(
         Math.floor(this.time) + 's · ' + this.kills + ' aliens · arma nv' + this.weaponLv + ' · ' + Math.floor(this.score) + ' pts',
         W / 2, H / 2 + 20
@@ -718,7 +944,6 @@ class SurvivorGame {
     const { W } = this;
     const p = this.player;
 
-    // Vida con glow
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(10, 12, 124, 18);
     ctx.fillStyle = p.hp > 30 ? '#3fff8e' : '#ff3f6e';
@@ -730,7 +955,11 @@ class SurvivorGame {
     ctx.lineWidth = 1;
     ctx.strokeRect(12, 14, 120, 14);
 
-    // Progreso de arma (chips)
+    for (let s = 0; s < 3; s++) {
+      ctx.fillStyle = s < this.shield ? '#3fd2ff' : 'rgba(63,210,255,0.15)';
+      ctx.fillRect(140 + s * 10, 16, 7, 10);
+    }
+
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(10, 34, 124, 10);
     ctx.fillStyle = '#ffd23f';
@@ -740,7 +969,9 @@ class SurvivorGame {
     ctx.fillStyle = '#ffd23f';
     ctx.font = 'bold 9px monospace';
     ctx.textAlign = 'left';
-    ctx.fillText('ARMA NV' + this.weaponLv, 12, 54);
+    let armaTxt = 'ARMA NV' + this.weaponLv;
+    if (this.rapidT > 0) armaTxt += ' ⚡' + Math.ceil(this.rapidT);
+    ctx.fillText(armaTxt, 12, 54);
 
     ctx.textAlign = 'center';
     ctx.fillStyle = '#fff';
@@ -770,6 +1001,17 @@ class SurvivorGame {
       ctx.font = 'bold 15px monospace';
       ctx.fillText('+100 SIN DAÑO', W / 2, 62);
     }
+    if (this.pickupT > 0) {
+      ctx.textAlign = 'center';
+      ctx.globalAlpha = Math.min(1, this.pickupT);
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = theme.accent;
+      ctx.shadowBlur = 8;
+      ctx.font = 'bold 18px monospace';
+      ctx.fillText(this.pickupMsg, W / 2, this.H / 2 + 60);
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+    }
     if (this.weaponFlash > 0) {
       ctx.textAlign = 'center';
       ctx.fillStyle = '#ffd23f';
@@ -790,12 +1032,11 @@ class SurvivorGame {
       ctx.shadowBlur = 0;
       ctx.globalAlpha = 1;
     }
-    // Hint inicial
     if (this.time < 6 && this.state === 'play') {
       ctx.textAlign = 'center';
       ctx.fillStyle = 'rgba(255,255,255,0.75)';
       ctx.font = '11px monospace';
-      ctx.fillText('recoge los chips ◆ para subir tu arma', this.W / 2, this.H - 24);
+      ctx.fillText('recoge chips ◆ e items para sobrevivir', this.W / 2, this.H - 24);
     }
   }
 }
