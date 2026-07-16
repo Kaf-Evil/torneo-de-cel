@@ -20,25 +20,26 @@ const ShareCard = {
     high: [
       'Tu cel hoy está a nivel LEYENDA DEL BARRIO',
       'Tu cel hoy está a nivel jefe final con lentes oscuros',
-      'Tu cel hoy está a nivel \"me retiro invicto\"',
+      'Tu cel hoy está a nivel "me retiro invicto"',
       'Tu cel hoy está a nivel 5G en el desierto'
     ],
     mid: [
       'Tu cel hoy está a nivel taquito de suerte',
-      'Tu cel hoy está a nivel \"casi casi, compa\"',
+      'Tu cel hoy está a nivel "casi casi, compa"',
       'Tu cel hoy está a nivel banca del equipo titular',
       'Tu cel hoy está a nivel 60% de batería: se puede'
     ],
     low: [
       'Tu cel hoy está a nivel señal de 1 barrita',
       'Tu cel hoy está a nivel Nokia mojado en arroz',
-      'Tu cel hoy está a nivel \"mejor mañana lo intento\"',
+      'Tu cel hoy está a nivel "mejor mañana lo intento"',
       'Tu cel hoy está a nivel modo avión emocional'
     ]
   },
   THRESHOLDS: {
     penales: { high: 600, mid: 300 },
-    survivor: { high: 1500, mid: 600 }
+    survivor: { high: 1500, mid: 600 },
+    fantasy: { high: 2000, mid: 400 } // ganancia neta de la apuesta
   },
 
   pickFlavor(mode, score) {
@@ -65,6 +66,24 @@ const ShareCard = {
         [0,0,5,5,5,5,0,0],
         [0,0,5,0,0,5,0,0],
         [0,2,2,0,0,2,2,0]
+      ]
+    },
+    fantasy: {
+      // Bolsa de monedas 8-bit con el símbolo $
+      palette: { 1: '#e3bd55', 2: '#6b5115', 3: '#ffd23f', 4: '#3fff8e', 5: '#b8912f' },
+      grid: [
+        [0,0,0,2,2,0,0,0],
+        [0,0,2,3,3,2,0,0],
+        [0,0,0,2,2,0,0,0],
+        [0,0,2,1,1,2,0,0],
+        [0,2,1,1,1,1,2,0],
+        [2,1,1,4,4,1,1,2],
+        [2,1,4,1,1,1,1,2],
+        [2,1,1,4,4,1,1,2],
+        [2,1,1,1,1,4,1,2],
+        [2,1,4,4,4,1,1,2],
+        [0,2,1,1,1,5,2,0],
+        [0,0,2,2,2,2,0,0]
       ]
     },
     survivor: {
@@ -147,13 +166,14 @@ const ShareCard = {
 
     // Título del torneo
     ctx.fillStyle = '#ffd23f';
-    ctx.font = 'bold 90px \"Courier New\", monospace';
+    ctx.font = 'bold 90px "Courier New", monospace';
     ctx.fillText('TORNEO DE CEL', W / 2, 200);
 
     // Modo jugado
     ctx.fillStyle = '#3fd2ff';
-    ctx.font = 'bold 64px \"Courier New\", monospace';
-    ctx.fillText(mode === 'penales' ? '- MODO PENALES -' : '- MODO SURVIVOR -', W / 2, 310);
+    ctx.font = 'bold 64px "Courier New", monospace';
+    const MODE_TITLES = { penales: '- MODO PENALES -', survivor: '- MODO SURVIVOR -', fantasy: '- TÓMBOLA FC -' };
+    ctx.fillText(MODE_TITLES[mode] || ('- ' + mode.toUpperCase() + ' -'), W / 2, 310);
 
     if (rosterPlayer && typeof CardRenderer !== 'undefined') {
       // Carta FIFA del jugador elegido: sonríe con buen score, llora con malo
@@ -172,52 +192,55 @@ const ShareCard = {
 
     // Nickname
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 80px \"Courier New\", monospace';
+    ctx.font = 'bold 80px "Courier New", monospace';
     ctx.fillText((player && player.nickname) || 'PLAYER', W / 2, 1050);
     if (player && player.handle) {
       ctx.fillStyle = '#888';
-      ctx.font = '44px \"Courier New\", monospace';
+      ctx.font = '44px "Courier New", monospace';
       ctx.fillText(player.handle, W / 2, 1110);
     }
 
     // Score gigante
     ctx.fillStyle = '#3fff8e';
-    ctx.font = 'bold 180px \"Courier New\", monospace';
+    ctx.font = 'bold 180px "Courier New", monospace';
     ctx.fillText(String(score), W / 2, 1300);
     ctx.fillStyle = '#aaa';
-    ctx.font = '46px \"Courier New\", monospace';
-    ctx.fillText('PUNTOS', W / 2, 1365);
+    ctx.font = '46px "Courier New", monospace';
+    ctx.fillText(mode === 'fantasy' ? 'MONEDAS GANADAS' : 'PUNTOS', W / 2, 1365);
 
     // Rank en leaderboard (si está disponible)
     if (rank) {
       ctx.fillStyle = '#ffd23f';
-      ctx.font = 'bold 58px \"Courier New\", monospace';
+      ctx.font = 'bold 58px "Courier New", monospace';
       ctx.fillText('#' + rank + ' EN EL MUNDO', W / 2, 1460);
     }
 
     // Stats breves
     if (stats) {
       ctx.fillStyle = '#3fd2ff';
-      ctx.font = '42px \"Courier New\", monospace';
+      ctx.font = '42px "Courier New", monospace';
       const bits = [];
       if (stats.goals !== undefined) bits.push(stats.goals + ' goles');
       if (stats.perfects !== undefined) bits.push(stats.perfects + ' perfectos');
       if (stats.kills !== undefined) bits.push(stats.kills + ' aliens');
       if (stats.time !== undefined) bits.push(Math.floor(stats.time) + 's vivo');
+      if (stats.result !== undefined) bits.push('marcador ' + stats.result);
+      if (stats.odds !== undefined) bits.push('cuota x' + stats.odds);
+      if (stats.win !== undefined) bits.push(stats.win ? 'apuesta ganada' : 'apuesta perdida');
       ctx.fillText(bits.join('  ·  '), W / 2, 1535);
     }
 
     // Flavor text (con word-wrap)
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'italic 48px \"Courier New\", monospace';
-    this._wrapText(ctx, '\"' + (flavor || '') + '\"', W / 2, 1630, W - 200, 60);
+    ctx.font = 'italic 48px "Courier New", monospace';
+    this._wrapText(ctx, '"' + (flavor || '') + '"', W / 2, 1630, W - 200, 60);
 
     // Logo pequeño abajo
     ctx.fillStyle = '#ffd23f';
-    ctx.font = 'bold 40px \"Courier New\", monospace';
+    ctx.font = 'bold 40px "Courier New", monospace';
     ctx.fillText('[ TORNEO DE CEL ]', W / 2, H - 110);
     ctx.fillStyle = '#666';
-    ctx.font = '32px \"Courier New\", monospace';
+    ctx.font = '32px "Courier New", monospace';
     ctx.fillText('juega en tu navegador', W / 2, H - 65);
 
     return canvas;

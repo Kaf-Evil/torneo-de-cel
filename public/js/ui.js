@@ -56,6 +56,7 @@
   function refreshBestScores() {
     $('#best-penales').textContent = 'Mejor Penales: ' + TDCStorage.get('tdc_best_penales', 0);
     $('#best-survivor').textContent = 'Mejor Survivor: ' + TDCStorage.get('tdc_best_survivor', 0);
+    $('#best-fantasy').textContent = 'Mayor premio Tómbola: 🪙 ' + TDCStorage.get('tdc_best_fantasy', 0);
   }
 
   /* ---------------- Arranque de juegos ---------------- */
@@ -63,6 +64,13 @@
   function startGame(mode, player) {
     saveProfileFromInputs();
     if (currentGame) currentGame.stop();
+    if (mode === 'fantasy') {
+      // Tómbola FC vive en su propia pantalla DOM (no usa el canvas compartido)
+      currentGame = null;
+      showScreen('screen-fantasy');
+      FantasyGame.start({ onResult: (result) => handleGameOver(result, { show: false }) });
+      return;
+    }
     showScreen('screen-game');
     const canvas = $('#game-canvas');
     if (mode === 'penales') {
@@ -93,11 +101,13 @@
 
   /* ---------------- Game over: score → leaderboard → score card ---------------- */
 
-  async function handleGameOver(result) {
+  async function handleGameOver(result, opts = {}) {
+    const show = opts.show !== false;
     if (currentGame) { currentGame.stop(); currentGame = null; }
     lastResult = result;
 
-    const modeName = result.mode === 'penales' ? 'PENALES' : 'SURVIVOR';
+    const MODE_NAMES = { penales: 'PENALES', survivor: 'SURVIVOR', fantasy: 'TÓMBOLA FC' };
+    const modeName = MODE_NAMES[result.mode] || result.mode.toUpperCase();
     $('#go-title').textContent = modeName + ' — ' + result.score + ' PTS';
 
     const s = result.stats || {};
@@ -110,12 +120,15 @@
     if (s.stage !== undefined) parts.push('stage ' + s.stage);
     if (s.weaponLv !== undefined) parts.push('arma nv' + s.weaponLv);
     if (s.chips !== undefined) parts.push(s.chips + ' chips');
+    if (s.result !== undefined) parts.push('marcador ' + s.result);
+    if (s.bet !== undefined) parts.push('apostó 🪙' + s.bet + ' a ' + (s.betType || '') + ' x' + s.odds);
+    if (s.win !== undefined) parts.push(s.win ? '¡cobró 🪙' + s.payout + '!' : 'la casa ganó');
     $('#go-summary').textContent = parts.join(' · ');
 
     const flavor = ShareCard.pickFlavor(result.mode, result.score);
     $('#go-flavor').textContent = flavor;
 
-    showScreen('screen-gameover');
+    if (show) showScreen('screen-gameover');
     refreshBestScores();
 
     // Enviar score al leaderboard (o guardarlo local si no hay API/red)
@@ -217,6 +230,16 @@
     });
     $('#btn-select-back').addEventListener('click', () => showScreen('screen-menu'));
     $('#btn-survivor').addEventListener('click', () => startGame('survivor'));
+    $('#btn-fantasy').addEventListener('click', () => startGame('fantasy'));
+    $('#btn-fantasy-back').addEventListener('click', () => {
+      FantasyGame.stop();
+      showScreen('screen-menu');
+      refreshBestScores();
+    });
+
+    // Hooks que usa fantasy.js para volver al menú / abrir la score card
+    window.TDC_backToMenu = () => { showScreen('screen-menu'); refreshBestScores(); };
+    window.TDC_showGameOver = () => showScreen('screen-gameover');
 
     $('#btn-quit').addEventListener('click', () => {
       if (currentGame) { currentGame.stop(); currentGame = null; }
