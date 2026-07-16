@@ -11,7 +11,9 @@
  * Binding requerido: D1 con nombre "DB".
  * ============================================================ */
 
-const CAPS = { penales: 1500, survivor: 100000 };
+/* fantasy (Tómbola FC): score = ganancia neta de una apuesta.
+ * Tope teórico: apuesta máx 1000 × cuota máx 25 = 25000. */
+const CAPS = { penales: 1500, survivor: 100000, fantasy: 25000 };
 const PEN_CAP = 1500;
 const SURV_CAP = 3000;
 
@@ -63,7 +65,7 @@ async function handleScore(request, env) {
   const mode = body.mode;
   const score = Math.floor(Number(body.score));
 
-  if (mode !== 'penales' && mode !== 'survivor') return json({ ok: false, error: 'invalid_mode' }, 400);
+  if (!Object.prototype.hasOwnProperty.call(CAPS, mode)) return json({ ok: false, error: 'invalid_mode' }, 400);
   if (typeof p.id !== 'string' || p.id.length < 8 || p.id.length > 40) return json({ ok: false, error: 'invalid_player' }, 400);
   if (!Number.isFinite(score) || score < 0 || score > CAPS[mode]) return json({ ok: false, error: 'invalid_score' }, 400);
 
@@ -115,7 +117,7 @@ async function handleLeaderboard(request, env) {
   const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '10', 10) || 10, 1), 50);
   const playerId = url.searchParams.get('player_id');
 
-  if (!['penales', 'survivor', 'total'].includes(mode)) return json({ ok: false, error: 'invalid_mode' }, 400);
+  if (!['penales', 'survivor', 'fantasy', 'total'].includes(mode)) return json({ ok: false, error: 'invalid_mode' }, 400);
   if (!['daily', 'weekly', 'alltime'].includes(range)) return json({ ok: false, error: 'invalid_range' }, 400);
   const since = sinceFor(range);
 

@@ -30,12 +30,14 @@
     <div class="menu-buttons">
       <button id="btn-penales" class="btn btn-big">&#9917; PENALES</button>
       <button id="btn-survivor" class="btn btn-big">&#128126; SURVIVOR</button>
+      <button id="btn-fantasy" class="btn btn-big">&#127920; T&Oacute;MBOLA FC</button>
       <button id="btn-leaderboard" class="btn">&#127942; LEADERBOARD</button>
     </div>
 
     <div class="best-scores">
       <span id="best-penales">Mejor Penales: 0</span>
       <span id="best-survivor">Mejor Survivor: 0</span>
+      <span id="best-fantasy">Mayor premio T&oacute;mbola: 0</span>
     </div>
   </section>
 
@@ -53,12 +55,22 @@
     <canvas id="game-canvas" width="360" height="640"></canvas>
   </section>
 
+  <!-- ============ PANTALLA: TÓMBOLA FC (fantasy + apuestas) ============ -->
+  <section id="screen-fantasy" class="screen">
+    <div class="fantasy-top">
+      <button id="btn-fantasy-back" class="btn btn-small" title="Salir">&larr;</button>
+      <span id="fantasy-coins" class="f-coins">&#129689; 1000</span>
+    </div>
+    <div id="fantasy-body" class="fantasy-body"></div>
+  </section>
+
   <!-- ============ PANTALLA: LEADERBOARD ============ -->
   <section id="screen-leaderboard" class="screen">
     <h2>&#127942; LEADERBOARD</h2>
     <div class="tabs" id="tabs-mode">
       <button data-mode="penales" class="tab active">Penales</button>
       <button data-mode="survivor" class="tab">Survivor</button>
+      <button data-mode="fantasy" class="tab">T&oacute;mbola</button>
       <button data-mode="total" class="tab">Total</button>
     </div>
     <div class="tabs" id="tabs-range">
@@ -91,6 +103,7 @@
 <script src="js/share.js"></script>
 <script src="js/penales.js"></script>
 <script src="js/survivor.js"></script>
+<script src="js/fantasy.js"></script>
 <script src="js/ui.js"></script>
 </body>
 </html>
