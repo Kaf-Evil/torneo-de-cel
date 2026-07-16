@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS scores (
   nickname TEXT NOT NULL,
   country TEXT DEFAULT '',
   handle TEXT DEFAULT '',
-  mode TEXT NOT NULL CHECK (mode IN ('penales','survivor')),
+  mode TEXT NOT NULL CHECK (mode IN ('penales','survivor','fantasy')),
   score INTEGER NOT NULL CHECK (score >= 0),
   stats TEXT DEFAULT '{}',
   ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
