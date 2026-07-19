@@ -1,18 +1,19 @@
 /* ============================================================
- * TORNEO DE CEL — survivor.js (v0.5 "arsenal edition")
- * Novedades sobre la v0.4 neón:
- *  - Alien SHOOTER (stage 3+): mantiene distancia, te dispara
- *    proyectiles; sus balas se esquivan o se bloquean con escudo.
- *  - ITEMS: los aliens sueltan drops además de chips:
- *      escudo (+1 carga, máx 3, bloquea un golpe cada una)
- *      botiquín (+25 vida) · rapid fire (8 s de cadencia doble)
- *      bomba (limpia enemigos y balas cercanas) · caja de arma
- *      (sube el nivel de arma al instante). El tank siempre
- *      suelta un item.
+ * TORNEO DE CEL — survivor.js (v0.6 "true survivor")
+ * Cambios sobre la v0.5:
+ *  - ONE-SHOT: sin vida ni curación. Un toque = muerte.
+ *    El escudo bloquea EXACTAMENTE un golpe (máx 1, sin acumular).
+ *  - Selección de NAVE al inicio: 4 modelos + 7 colores (se guarda).
+ *  - MEJORAS entre stages: al terminar cada stage el juego se pausa
+ *    y eliges 1 de 3 mejoras (disparo, velocidad, cadencia, bala
+ *    veloz, imán, escudo). Ahí también puedes cambiar color/forma.
+ *  - Velocidad de enemigos escala más fuerte con el stage.
+ *  - MINI-BOSS cada 3 stages: gigante, movimiento errático con
+ *    dashes, ráfagas radiales; su dificultad crece con los stages.
  *
  * Estructuras:
- *  enemy   = { x, y, r, hp, type, speed, zigT, animT, fireT?, strafeDir? }
- *  ebullet = { x, y, vx, vy, r }          (balas enemigas)
+ *  enemy   = { x, y, r, hp, type, speed, zigT, animT, fireT?, strafeDir?, boss? }
+ *  ebullet = { x, y, vx, vy, r }
  *  item    = { x, y, vx, vy, ttl, type }
  * ============================================================ */
 
@@ -30,20 +31,64 @@ class SurvivorGame {
       grunt:   { hp: 1, speed: 42, r: 10, score: 10, minStage: 1 },
       runner:  { hp: 1, speed: 78, r: 8,  score: 15, minStage: 2, zigzag: true },
       shooter: { hp: 2, speed: 55, r: 9,  score: 25, minStage: 3, ranged: true },
-      tank:    { hp: 4, speed: 24, r: 16, score: 40, minStage: 4 }
+      tank:    { hp: 4, speed: 24, r: 16, score: 40, minStage: 4 },
+      boss:    { hp: 24, speed: 52, r: 28, score: 400, minStage: 99 } // solo por _spawnBoss
     };
     this.STAGE_SECONDS = 15;
     this.COMBO_WINDOW = 2.5;
 
-    /* Tabla de drops de items (pesos) */
+    /* Tabla de drops de items (pesos) — sin curación: esto es survivor */
     this.ITEM_TABLE = [
-      { type: 'med',    w: 28 },
-      { type: 'shield', w: 28 },
-      { type: 'rapid',  w: 22 },
-      { type: 'nuke',   w: 12 },
-      { type: 'crate',  w: 10 }
+      { type: 'shield', w: 40 },
+      { type: 'rapid',  w: 30 },
+      { type: 'nuke',   w: 18 },
+      { type: 'crate',  w: 12 }
     ];
     this.ITEM_DROP_CHANCE = 0.07; // por kill normal (tank: 100%)
+
+    /* ---- Naves: 4 modelos, el color 'b' se sustituye por el elegido ---- */
+    this.SHIP_COLORS = ['#3fd2ff', '#ff6ec7', '#3fff8e', '#ffd23f', '#b26eff', '#ff9f3f', '#f2f2f2'];
+    this.SHIP_SHAPES = {
+      delta: {
+        name: 'DELTA',
+        frames: [
+          ['000bb000', '00bbbb00', '00baab00', '0bbaabb0', '0baaaab0', 'bbaccabb', 'b0bccb0b', '000bb000'],
+          ['000bb000', '00bbbb00', '00baab00', '0bbaabb0', '0baaaab0', 'bbaccabb', 'b0bccb0b', '00b00b00']
+        ]
+      },
+      viper: {
+        name: 'VIPER',
+        frames: [
+          ['b000000b', 'bb0bb0bb', 'bbbaabbb', '0baaaab0', '0baaaab0', 'bbbccbbb', 'bb0cc0bb', 'b000000b'],
+          ['b000000b', 'bb0bb0bb', 'bbbaabbb', '0baaaab0', '0baaaab0', 'bbbccbbb', 'b00cc00b', '0b0000b0']
+        ]
+      },
+      orbe: {
+        name: 'ORBE',
+        frames: [
+          ['00bbbb00', '0baaaab0', 'baaccaab', 'baccccab', 'baccccab', 'baaccaab', '0baaaab0', '00bbbb00'],
+          ['00bbbb00', '0baaaab0', 'baaccaab', 'baccccab', 'baccccab', 'baaccaab', '0baaaab0', '0b0bb0b0']
+        ]
+      },
+      mazo: {
+        name: 'MAZO',
+        frames: [
+          ['bbb00bbb', 'bbbbbbbb', 'baabbaab', 'baaaaaab', 'baaccaab', 'bbaccabb', '0bbbbbb0', '00b00b00'],
+          ['bbb00bbb', 'bbbbbbbb', 'baabbaab', 'baaaaaab', 'baaccaab', 'bbaccabb', '0bbbbbb0', '0b0bb0b0']
+        ]
+      }
+    };
+    this.SHIP_PALETTE_BASE = { a: '#f2f2f2', c: '#666a77' };
+
+    /* ---- Pool de mejoras entre stages ---- */
+    this.UPGRADE_POOL = [
+      { id: 'weapon', icon: '🔫', name: 'DISPARO +1',   desc: 'sube el nivel de arma',   apply: (g) => { g.weaponLv++; g.weaponFlash = 1.5; } },
+      { id: 'speed',  icon: '👟', name: 'VELOCIDAD',    desc: '+12% de movimiento',      apply: (g) => { g.speedMult *= 1.12; } },
+      { id: 'rate',   icon: '⚡', name: 'CADENCIA',     desc: 'disparas 12% más rápido', apply: (g) => { g.fireMult *= 0.88; } },
+      { id: 'bspeed', icon: '🚀', name: 'BALA VELOZ',   desc: 'balas 18% más rápidas',   apply: (g) => { g.bulletSpeedMult *= 1.18; } },
+      { id: 'magnet', icon: '🧲', name: 'IMÁN',         desc: 'recoges de más lejos',    apply: (g) => { g.magnetMult *= 1.4; } },
+      { id: 'shield', icon: '🛡️', name: 'ESCUDO',       desc: 'bloquea 1 golpe (máx 1)', apply: (g) => { g.shield = 1; } }
+    ];
 
     /* ---- Temas neón: uno por stage, rotan ---- */
     this.THEMES = [
@@ -100,8 +145,6 @@ class SurvivorGame {
 
     /* ---- Iconos de items (8x8) ---- */
     this.ITEM_DEFS = {
-      med:    { glow: '#3fff8e', palette: { a: '#ffffff', b: '#ff3f6e' },
-                grid: ['0bbbbbb0','bbbaabbb','bbbaabbb','baaaaaab','baaaaaab','bbbaabbb','bbbaabbb','0bbbbbb0'] },
       shield: { glow: '#3fd2ff', palette: { a: '#3fd2ff', b: '#bfeaff' },
                 grid: ['0aaaaaa0','abbbbbba','abbbbbba','abbbbbba','0abbbba0','0abbbba0','00abba00','000aa000'] },
       rapid:  { glow: '#ffd23f', palette: { a: '#ffd23f', b: '#fff7d0' },
@@ -139,7 +182,21 @@ class SurvivorGame {
   }
 
   _reset() {
-    this.player = { x: this.W / 2, y: this.H / 2, r: 10, hp: 100, maxHp: 100, speed: 145, iTimer: 0 };
+    this.player = { x: this.W / 2, y: this.H / 2, r: 10, speed: 145, iTimer: 0 };
+    // Nave elegida (persistida) y multiplicadores de mejoras
+    const ship = TDCStorage.get('tdc_ship', { model: 'delta', color: 0 });
+    this.shipModel = this.SHIP_SHAPES[ship.model] ? ship.model : 'delta';
+    this.shipColor = Math.min(Math.max(ship.color | 0, 0), this.SHIP_COLORS.length - 1);
+    this.speedMult = 1;
+    this.fireMult = 1;
+    this.bulletSpeedMult = 1;
+    this.magnetMult = 1;
+    this.upgradeChoices = null;   // las 3 cartas del intermission
+    this.upgradesTaken = 0;
+    this.bossesKilled = 0;
+    this.bossBannerT = 0;
+    this._uiHits = [];            // zonas clicables de select/upgrade
+    this._previewCache = {};      // previews de naves (no re-hornear por frame)
     this.enemies = [];
     this.bullets = [];
     this.ebullets = [];
@@ -165,14 +222,14 @@ class SurvivorGame {
     this.chipsCollected = 0;
     this.chipsTotal = 0;
     this.weaponFlash = 0;
-    this.shield = 0;
+    this.shield = 0;              // máx 1: bloquea exactamente un golpe
     this.rapidT = 0;
     this.itemsTotal = 0;
     this.pickupMsg = '';
     this.pickupT = 0;
     this.nukeFx = null;
     this._nukeActive = false;
-    this.state = 'play';
+    this.state = 'select';        // select → play ⇄ upgrade → over
     this.overT = 0;
     this._reported = false;
     this.keys = {};
@@ -207,11 +264,17 @@ class SurvivorGame {
       return c;
     };
 
+    this._bake = bake;
     this.sprites = {};
     const PX = { grunt: 2.6, runner: 2.4, shooter: 2.5, tank: 3.4, player: 2.8 };
     for (const [name, def] of Object.entries(this.SPRITE_DEFS)) {
       this.sprites[name] = def.frames.map((rows) => bake(rows, def.palette, def.glow, PX[name]));
     }
+    // Nave del jugador según modelo+color elegidos
+    this._bakePlayerSprite();
+    // Mini-boss: el tank a lo bestia, paleta de alerta roja
+    const bossPal = { a: '#ff4f5e', b: '#7a0d16', c: '#ffe1e1' };
+    this.sprites.boss = this.SPRITE_DEFS.tank.frames.map((rows) => bake(rows, bossPal, '#ff4f5e', 6.4));
     this.itemSprites = {};
     for (const [name, def] of Object.entries(this.ITEM_DEFS)) {
       this.itemSprites[name] = bake(def.grid, def.palette, def.glow, 2.2);
@@ -251,13 +314,38 @@ class SurvivorGame {
     this.chipSprite = ch;
   }
 
+  /* Re-hornea la nave con el modelo+color elegidos (también para la UI) */
+  _bakePlayerSprite() {
+    const shape = this.SHIP_SHAPES[this.shipModel];
+    const color = this.SHIP_COLORS[this.shipColor];
+    const palette = Object.assign({}, this.SHIP_PALETTE_BASE, { b: color });
+    this.sprites.player = shape.frames.map((rows) => this._bake(rows, palette, color, 2.8));
+    TDCStorage.set('tdc_ship', { model: this.shipModel, color: this.shipColor });
+  }
+
+  _saveShipPreview(model, colorIdx, px = 3.4) {
+    const key = model + ':' + colorIdx + ':' + px;
+    if (this._previewCache[key]) return this._previewCache[key];
+    const shape = this.SHIP_SHAPES[model];
+    const color = this.SHIP_COLORS[colorIdx];
+    const palette = Object.assign({}, this.SHIP_PALETTE_BASE, { b: color });
+    return (this._previewCache[key] = this._bake(shape.frames[0], palette, color, px));
+  }
+
   /* ---------------- Input (igual que v0.4) ---------------- */
   _bindInput() {
-    this._onKeyDown = (e) => { this.keys[e.key.toLowerCase()] = true; };
+    this._onKeyDown = (e) => {
+      this.keys[e.key.toLowerCase()] = true;
+      if (this.state === 'select' || this.state === 'upgrade') this._uiKey(e.key);
+    };
     this._onKeyUp = (e) => { this.keys[e.key.toLowerCase()] = false; };
     this._onPDown = (e) => {
       e.preventDefault();
       const p = this._pos(e);
+      if (this.state === 'select' || this.state === 'upgrade') {
+        this._uiClick(p.x, p.y);
+        return;
+      }
       if (e.pointerType === 'touch') {
         this.joy = { active: true, ox: p.x, oy: p.y, dx: 0, dy: 0, id: e.pointerId };
       } else {
@@ -329,14 +417,102 @@ class SurvivorGame {
     return { x: 0, y: 0 };
   }
 
+  /* ---------------- UI de select / upgrade ---------------- */
+
+  _uiClick(x, y) {
+    for (const h of this._uiHits) {
+      if (x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h) { h.fn(); return; }
+    }
+  }
+
+  _uiKey(key) {
+    if (this.state === 'select') {
+      const models = Object.keys(this.SHIP_SHAPES);
+      const n = parseInt(key, 10);
+      if (n >= 1 && n <= models.length) { this.shipModel = models[n - 1]; this._bakePlayerSprite(); }
+      else if (key === 'ArrowLeft') { this.shipColor = (this.shipColor + this.SHIP_COLORS.length - 1) % this.SHIP_COLORS.length; this._bakePlayerSprite(); }
+      else if (key === 'ArrowRight') { this.shipColor = (this.shipColor + 1) % this.SHIP_COLORS.length; this._bakePlayerSprite(); }
+      else if (key === 'Enter' || key === ' ') this._startRun();
+    } else if (this.state === 'upgrade' && this.upgradeChoices) {
+      const n = parseInt(key, 10);
+      if (n >= 1 && n <= this.upgradeChoices.length) this._chooseUpgrade(this.upgradeChoices[n - 1]);
+      else if (key.toLowerCase() === 'c') { this.shipColor = (this.shipColor + 1) % this.SHIP_COLORS.length; this._bakePlayerSprite(); }
+      else if (key.toLowerCase() === 'v') this._cycleModel();
+    }
+  }
+
+  _cycleModel() {
+    const models = Object.keys(this.SHIP_SHAPES);
+    this.shipModel = models[(models.indexOf(this.shipModel) + 1) % models.length];
+    this._bakePlayerSprite();
+  }
+
+  _startRun() {
+    this.state = 'play';
+    this.stageBannerT = 2;
+    this._last = performance.now();
+  }
+
+  /* Al terminar un stage: pausa + 3 mejoras al azar */
+  _openUpgrade() {
+    const pool = this.UPGRADE_POOL.filter((u) => !(u.id === 'shield' && this.shield >= 1));
+    const choices = [];
+    const bag = [...pool];
+    while (choices.length < 3 && bag.length) {
+      choices.push(bag.splice(Math.floor(Math.random() * bag.length), 1)[0]);
+    }
+    this.upgradeChoices = choices;
+    this.state = 'upgrade';
+    this.ebullets.length = 0; // respiro: no te matan en pausa
+  }
+
+  _chooseUpgrade(up) {
+    up.apply(this);
+    this.upgradesTaken++;
+    this.upgradeChoices = null;
+    this.pickupMsg = up.icon + ' ' + up.name;
+    this.pickupT = 1.5;
+    this.state = 'play';
+    this.stageBannerT = 2;
+    // Cada 3 stages: entra el MINI-BOSS
+    if (this.stage % 3 === 0) this._spawnBoss();
+  }
+
   /* ---------------- Dificultad y spawning ---------------- */
 
   _spawnInterval() {
     return Math.max(0.25, 1.15 * Math.pow(0.87, this.stage - 1));
   }
 
+  /* La velocidad enemiga escala fuerte con el stage (esto ES un survivor) */
   _speedFactor() {
-    return 1 + 0.06 * (this.stage - 1);
+    return Math.min(2.3, 1 + 0.10 * (this.stage - 1));
+  }
+
+  /* ---------------- Mini-boss ---------------- */
+
+  _spawnBoss() {
+    const n = this.bossesKilled + 1; // n-ésimo boss: cada vez peor
+    const side = Math.floor(Math.random() * 4);
+    let x, y;
+    if (side === 0) { x = this.W / 2; y = -50; }
+    else if (side === 1) { x = this.W + 50; y = this.H / 2; }
+    else if (side === 2) { x = this.W / 2; y = this.H + 50; }
+    else { x = -50; y = this.H / 2; }
+    this.enemies.push({
+      x, y, type: 'boss', boss: true,
+      r: 28,
+      hp: 24 + 18 * (n - 1) + 4 * this.stage,
+      maxHp: 24 + 18 * (n - 1) + 4 * this.stage,
+      speed: (52 + 5 * this.stage) * 1,
+      zigT: 0, animT: 0,
+      fireT: 2,
+      wanderT: 0, dirX: 0, dirY: 1, dash: 1,
+      strafeDir: 1
+    });
+    this.stageBannerT = 0;
+    this.bossBannerT = 2.2;
+    this.shakeT = 0.4;
   }
 
   _pickEnemyType() {
@@ -377,10 +553,10 @@ class SurvivorGame {
 
   _fireInterval() {
     const base = 0.34 * Math.pow(0.88, this.weaponLv - 1);
-    let interval = Math.max(0.12, base);
+    let interval = Math.max(0.12, base) * this.fireMult; // mejora de cadencia
     if (this.boost) interval *= 0.72;
     if (this.rapidT > 0) interval *= 0.55; // item rapid fire
-    return Math.max(0.07, interval);
+    return Math.max(0.06, interval);
   }
 
   _aimVector() {
@@ -405,7 +581,7 @@ class SurvivorGame {
   _fire() {
     const p = this.player;
     const a = this._aimVector();
-    const SPEED = 330;
+    const SPEED = 330 * this.bulletSpeedMult; // mejora de bala veloz
     const shots = [];
     if (this.weaponLv >= 3) {
       const px = -a.y * 5, py = a.x * 5;
@@ -429,7 +605,9 @@ class SurvivorGame {
     }
   }
 
-  /* ---------------- Daño al jugador (escudo → vida) ---------------- */
+  /* ---------------- Daño al jugador: ONE-SHOT ----------------
+   * Sin vida. Un toque = muerte. El escudo bloquea exactamente
+   * un golpe (y se rompe). Esto es un survivor de verdad. */
   _hitPlayer(srcX, srcY) {
     const p = this.player;
     if (p.iTimer > 0) return;
@@ -437,23 +615,19 @@ class SurvivorGame {
     this.combo = 0;
     this.shakeT = 0.35;
     if (this.shield > 0) {
-      this.shield--;
-      p.iTimer = 0.5;
-      this.pickupMsg = 'ESCUDO -1';
-      this.pickupT = 0.8;
+      this.shield = 0;
+      p.iTimer = 1.0;
+      this.pickupMsg = '💥 ESCUDO ROTO';
+      this.pickupT = 1.0;
       return;
     }
-    p.hp -= 10;
-    p.iTimer = 0.8;
-    if (p.hp <= 0) {
-      p.hp = 0;
-      this.state = 'over';
-      this.overT = 0;
-      const final = Math.floor(this.score);
-      if (final > this.best) {
-        this.best = final;
-        TDCStorage.set('tdc_best_survivor', this.best);
-      }
+    // Muerte instantánea
+    this.state = 'over';
+    this.overT = 0;
+    const final = Math.floor(this.score);
+    if (final > this.best) {
+      this.best = final;
+      TDCStorage.set('tdc_best_survivor', this.best);
     }
   }
 
@@ -470,7 +644,17 @@ class SurvivorGame {
     const mult = 1 + 0.1 * Math.min(this.combo, 20);
     this.score += spec.score * mult;
 
-    const glow = this.SPRITE_DEFS[e.type].glow;
+    // Recompensa de boss: puntos extra y lluvia de items
+    if (e.boss) {
+      this.bossesKilled++;
+      this.score += 200 * this.bossesKilled;
+      this.pickupMsg = '👹 BOSS DERROTADO +' + (400 + 200 * this.bossesKilled);
+      this.pickupT = 2;
+      this.shakeT = 0.5;
+      for (let i = 0; i < 3; i++) this._spawnItem(e.x + (i - 1) * 20, e.y);
+    }
+
+    const glow = (this.SPRITE_DEFS[e.type] || { glow: '#ff4f5e' }).glow;
     for (let i = 0; i < 10; i++) {
       const ang = Math.random() * Math.PI * 2;
       const sp = 40 + Math.random() * 110;
@@ -501,7 +685,7 @@ class SurvivorGame {
     let total = 0;
     for (const it of this.ITEM_TABLE) total += it.w;
     let r = Math.random() * total;
-    let type = 'med';
+    let type = 'shield';
     for (const it of this.ITEM_TABLE) {
       if (r < it.w) { type = it.type; break; }
       r -= it.w;
@@ -515,13 +699,14 @@ class SurvivorGame {
   }
 
   _applyItem(type) {
-    const p = this.player;
-    if (type === 'med') {
-      p.hp = Math.min(p.maxHp, p.hp + 25);
-      this.pickupMsg = '+25 VIDA';
-    } else if (type === 'shield') {
-      this.shield = Math.min(3, this.shield + 1);
-      this.pickupMsg = '+ESCUDO (' + this.shield + '/3)';
+    if (type === 'shield') {
+      if (this.shield >= 1) {
+        this.score += 40;
+        this.pickupMsg = 'ESCUDO YA ACTIVO +40';
+      } else {
+        this.shield = 1;
+        this.pickupMsg = '🛡️ ESCUDO (bloquea 1 golpe)';
+      }
     } else if (type === 'rapid') {
       this.rapidT = 8;
       this.pickupMsg = 'RAPID FIRE!';
@@ -556,6 +741,8 @@ class SurvivorGame {
   /* ---------------- Update ---------------- */
 
   update(dt) {
+    // Pantallas de selección de nave y de mejoras: mundo congelado
+    if (this.state === 'select' || this.state === 'upgrade') return;
     if (this.state === 'over') {
       this.overT += dt;
       for (let i = this.particles.length - 1; i >= 0; i--) {
@@ -575,7 +762,10 @@ class SurvivorGame {
             stage: this.stage,
             chips: this.chipsTotal,
             weaponLv: this.weaponLv,
-            items: this.itemsTotal
+            items: this.itemsTotal,
+            bosses: this.bossesKilled,
+            upgrades: this.upgradesTaken,
+            ship: this.shipModel
           }
         });
       }
@@ -607,20 +797,23 @@ class SurvivorGame {
     const newStage = Math.floor(this.time / this.STAGE_SECONDS) + 1;
     if (newStage > this.stage) {
       this.stage = newStage;
-      this.stageBannerT = 2;
       this.flashT = 0.5;
+      this._openUpgrade(); // pausa: elige tu mejora
+      return;
     }
     if (this.stageBannerT > 0) this.stageBannerT -= dt;
+    if (this.bossBannerT > 0) this.bossBannerT -= dt;
 
     if (this.comboT > 0) {
       this.comboT -= dt;
       if (this.comboT <= 0) this.combo = 0;
     }
 
-    // Movimiento + estela
+    // Movimiento + estela (mejora de velocidad aplica aquí)
     const mv = this._moveVector();
-    p.x = Math.max(p.r, Math.min(this.W - p.r, p.x + mv.x * p.speed * dt));
-    p.y = Math.max(p.r, Math.min(this.H - p.r, p.y + mv.y * p.speed * dt));
+    const spd = p.speed * this.speedMult;
+    p.x = Math.max(p.r, Math.min(this.W - p.r, p.x + mv.x * spd * dt));
+    p.y = Math.max(p.r, Math.min(this.H - p.r, p.y + mv.y * spd * dt));
     if (p.iTimer > 0) p.iTimer -= dt;
     if (mv.x || mv.y) this.trail.push({ x: p.x, y: p.y, life: 0.3 });
     for (let i = this.trail.length - 1; i >= 0; i--) {
@@ -652,11 +845,48 @@ class SurvivorGame {
       }
     }
 
-    // Enemigos: persecución / zigzag / francotirador
+    // Enemigos: persecución / zigzag / francotirador / MINI-BOSS errático
     for (const e of this.enemies) {
       const spec = this.ENEMY_TYPES[e.type];
       const d = Math.hypot(p.x - e.x, p.y - e.y) || 1;
       let vx = (p.x - e.x) / d, vy = (p.y - e.y) / d;
+
+      if (e.boss) {
+        // Movimiento errático: cambia de rumbo, a veces DASH hacia ti
+        e.wanderT -= dt;
+        if (e.wanderT <= 0) {
+          const toward = Math.random() < 0.45;
+          const ang = toward
+            ? Math.atan2(p.y - e.y, p.x - e.x) + (Math.random() - 0.5) * 0.9
+            : Math.random() * Math.PI * 2;
+          e.dirX = Math.cos(ang);
+          e.dirY = Math.sin(ang);
+          e.dash = Math.random() < 0.35 ? 2.4 : 1;
+          e.wanderT = 0.45 + Math.random() * 0.85;
+        }
+        e.dash = Math.max(1, e.dash - dt * 1.2);
+        e.x += e.dirX * e.speed * e.dash * dt;
+        e.y += e.dirY * e.speed * e.dash * dt;
+        // Rebota en los bordes
+        if (e.x < e.r) { e.x = e.r; e.dirX = Math.abs(e.dirX); }
+        if (e.x > this.W - e.r) { e.x = this.W - e.r; e.dirX = -Math.abs(e.dirX); }
+        if (e.y < e.r) { e.y = e.r; e.dirY = Math.abs(e.dirY); }
+        if (e.y > this.H - e.r) { e.y = this.H - e.r; e.dirY = -Math.abs(e.dirY); }
+        // Ráfaga radial de balas (más densa y rápida con los stages)
+        e.fireT -= dt;
+        if (e.fireT <= 0 && this.ebullets.length < 70) {
+          const n = 8 + 2 * Math.min(4, Math.floor(this.stage / 3));
+          const base = Math.random() * Math.PI * 2;
+          const SPEED = 105 + 7 * this.stage;
+          for (let k = 0; k < n; k++) {
+            const a = base + (k * Math.PI * 2) / n;
+            this.ebullets.push({ x: e.x, y: e.y, vx: Math.cos(a) * SPEED, vy: Math.sin(a) * SPEED, r: 4 });
+          }
+          e.fireT = Math.max(1.2, 2.5 - 0.09 * this.stage);
+        }
+        e.animT += dt;
+        continue;
+      }
 
       if (spec.ranged) {
         if (d > 170) {
@@ -664,9 +894,11 @@ class SurvivorGame {
         } else if (d < 120) {
           vx = -vx; vy = -vy; // retroceder
         } else {
+          // orbitar (strafe perpendicular)
           const sx = -vy * e.strafeDir, sy = vx * e.strafeDir;
           vx = sx; vy = sy;
         }
+        // Disparo hacia el jugador
         e.fireT -= dt;
         if (e.fireT <= 0 && d < 320 && this.ebullets.length < 40) {
           const bd = Math.hypot(p.x - e.x, p.y - e.y) || 1;
@@ -713,7 +945,7 @@ class SurvivorGame {
       c.ttl -= dt;
       c.vx *= 0.9; c.vy *= 0.9;
       const d = Math.hypot(p.x - c.x, p.y - c.y) || 1;
-      if (d < 55) {
+      if (d < 55 * this.magnetMult) {
         c.vx += (p.x - c.x) / d * 600 * dt;
         c.vy += (p.y - c.y) / d * 600 * dt;
       }
@@ -740,7 +972,7 @@ class SurvivorGame {
       it.ttl -= dt;
       it.vx *= 0.9; it.vy *= 0.9;
       const d = Math.hypot(p.x - it.x, p.y - it.y) || 1;
-      if (d < 45) {
+      if (d < 45 * this.magnetMult) {
         it.vx += (p.x - it.x) / d * 500 * dt;
         it.vy += (p.y - it.y) / d * 500 * dt;
       }
@@ -799,12 +1031,18 @@ class SurvivorGame {
     const p = this.player;
     const theme = this._theme();
 
+    if (this.state === 'select') {
+      this._renderSelect(ctx, theme);
+      return;
+    }
+
     ctx.save();
     if (this.shakeT > 0) {
       const k = this.shakeT * 14;
       ctx.translate((Math.random() - 0.5) * k, (Math.random() - 0.5) * k);
     }
 
+    // Fondo + grid del tema
     ctx.fillStyle = theme.bg;
     ctx.fillRect(-10, -10, W + 20, H + 20);
     ctx.strokeStyle = theme.grid;
@@ -812,6 +1050,7 @@ class SurvivorGame {
     for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
     for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
 
+    // Estela
     for (const t of this.trail) {
       ctx.globalAlpha = t.life * 0.9;
       ctx.fillStyle = theme.accent;
@@ -820,6 +1059,7 @@ class SurvivorGame {
     }
     ctx.globalAlpha = 1;
 
+    // Chips e items (parpadean al expirar)
     for (const c of this.chips) {
       if (c.ttl < 2 && Math.floor(c.ttl * 8) % 2 === 0) continue;
       ctx.drawImage(this.chipSprite, c.x - 10, c.y - 10);
@@ -831,14 +1071,24 @@ class SurvivorGame {
       ctx.drawImage(img, it.x - img.width / 2, it.y - img.height / 2 + bob);
     }
 
+    // Balas
     for (const b of this.bullets) ctx.drawImage(this.bulletSprite, b.x - 9, b.y - 9);
     for (const b of this.ebullets) ctx.drawImage(this.ebulletSprite, b.x - 9, b.y - 9);
 
+    // Aliens (el boss lleva barra de vida encima)
     for (const e of this.enemies) {
       const img = this.sprites[e.type][Math.floor(e.animT * 6) % 2];
       ctx.drawImage(img, e.x - img.width / 2, e.y - img.height / 2);
+      if (e.boss) {
+        const bw = 56;
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(e.x - bw / 2 - 1, e.y - e.r - 18, bw + 2, 7);
+        ctx.fillStyle = '#ff4f5e';
+        ctx.fillRect(e.x - bw / 2, e.y - e.r - 17, bw * Math.max(0, e.hp / e.maxHp), 5);
+      }
     }
 
+    // Partículas
     for (const pa of this.particles) {
       ctx.globalAlpha = Math.max(0, Math.min(1, pa.life * 2.2));
       ctx.fillStyle = pa.c;
@@ -846,6 +1096,7 @@ class SurvivorGame {
     }
     ctx.globalAlpha = 1;
 
+    // Onda expansiva de la bomba
     if (this.nukeFx) {
       ctx.globalAlpha = Math.max(0, this.nukeFx.t * 2);
       ctx.strokeStyle = '#ff9f3f';
@@ -859,6 +1110,7 @@ class SurvivorGame {
       ctx.globalAlpha = 1;
     }
 
+    // Jugador + cañón + anillo de escudo
     const blink = p.iTimer > 0 && Math.floor(p.iTimer * 10) % 2 === 0;
     if (!blink) {
       const a = this._aimVector();
@@ -875,20 +1127,20 @@ class SurvivorGame {
       ctx.drawImage(img, p.x - img.width / 2, p.y - img.height / 2);
     }
     if (this.shield > 0) {
+      // Anillo completo: tu única segunda oportunidad
       ctx.strokeStyle = '#3fd2ff';
       ctx.lineWidth = 2.5;
       ctx.shadowColor = '#3fd2ff';
       ctx.shadowBlur = 8;
-      const rot = this.time * 1.5;
-      for (let s = 0; s < this.shield; s++) {
-        const a0 = rot + (s * Math.PI * 2) / 3;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 18, a0, a0 + Math.PI * 2 / 3 - 0.5);
-        ctx.stroke();
-      }
+      ctx.globalAlpha = 0.7 + 0.3 * Math.sin(this.time * 6);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 18, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
       ctx.shadowBlur = 0;
     }
 
+    // Crosshair (mouse)
     if (this.aim.mouse && this.state === 'play') {
       ctx.strokeStyle = theme.accent;
       ctx.lineWidth = 1.5;
@@ -901,6 +1153,7 @@ class SurvivorGame {
       ctx.stroke();
     }
 
+    // Joystick (touch)
     if (this.joy.active) {
       ctx.beginPath();
       ctx.arc(this.joy.ox, this.joy.oy, 50, 0, Math.PI * 2);
@@ -913,6 +1166,7 @@ class SurvivorGame {
       ctx.fill();
     }
 
+    // Flash de stage
     if (this.flashT > 0) {
       ctx.globalAlpha = this.flashT * 0.5;
       ctx.fillStyle = theme.accent;
@@ -923,6 +1177,7 @@ class SurvivorGame {
     ctx.restore();
 
     this._renderHUD(ctx, theme);
+    if (this.state === 'upgrade') this._renderUpgrade(ctx, theme);
 
     if (this.state === 'over') {
       ctx.fillStyle = 'rgba(0,0,0,0.65)';
@@ -942,24 +1197,24 @@ class SurvivorGame {
 
   _renderHUD(ctx, theme) {
     const { W } = this;
-    const p = this.player;
 
+    // Estado vital: ONE-SHOT (con o sin escudo)
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(10, 12, 124, 18);
-    ctx.fillStyle = p.hp > 30 ? '#3fff8e' : '#ff3f6e';
-    ctx.shadowColor = ctx.fillStyle;
-    ctx.shadowBlur = 6;
-    ctx.fillRect(12, 14, 120 * p.hp / p.maxHp, 14);
-    ctx.shadowBlur = 0;
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(12, 14, 120, 14);
-
-    for (let s = 0; s < 3; s++) {
-      ctx.fillStyle = s < this.shield ? '#3fd2ff' : 'rgba(63,210,255,0.15)';
-      ctx.fillRect(140 + s * 10, 16, 7, 10);
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 11px monospace';
+    if (this.shield > 0) {
+      ctx.fillStyle = '#3fd2ff';
+      ctx.shadowColor = '#3fd2ff';
+      ctx.shadowBlur = 6;
+      ctx.fillText('🛡️ ESCUDO x1', 16, 25);
+      ctx.shadowBlur = 0;
+    } else {
+      ctx.fillStyle = '#ff3f6e';
+      ctx.fillText('☠ 1 TOQUE = MUERTE', 14, 25);
     }
 
+    // Progreso de arma
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(10, 34, 124, 10);
     ctx.fillStyle = '#ffd23f';
@@ -1001,6 +1256,7 @@ class SurvivorGame {
       ctx.font = 'bold 15px monospace';
       ctx.fillText('+100 SIN DAÑO', W / 2, 62);
     }
+    // Mensaje de pickup (item recogido / escudo gastado)
     if (this.pickupT > 0) {
       ctx.textAlign = 'center';
       ctx.globalAlpha = Math.min(1, this.pickupT);
@@ -1032,11 +1288,168 @@ class SurvivorGame {
       ctx.shadowBlur = 0;
       ctx.globalAlpha = 1;
     }
+    if (this.bossBannerT > 0 && this.state === 'play') {
+      ctx.textAlign = 'center';
+      ctx.globalAlpha = Math.min(1, this.bossBannerT);
+      ctx.fillStyle = '#ff4f5e';
+      ctx.shadowColor = '#ff4f5e';
+      ctx.shadowBlur = 12;
+      ctx.font = 'bold 30px monospace';
+      ctx.fillText('⚠ MINI-BOSS ⚠', this.W / 2, this.H / 2 - 50);
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+    }
     if (this.time < 6 && this.state === 'play') {
       ctx.textAlign = 'center';
       ctx.fillStyle = 'rgba(255,255,255,0.75)';
       ctx.font = '11px monospace';
-      ctx.fillText('recoge chips ◆ e items para sobrevivir', this.W / 2, this.H - 24);
+      ctx.fillText('☠ un toque y mueres · esquiva, recoge chips ◆', this.W / 2, this.H - 24);
     }
+  }
+
+  /* ---------------- Pantalla: elige tu nave ---------------- */
+
+  _renderSelect(ctx, theme) {
+    const { W, H } = this;
+    this._uiHits = [];
+    ctx.fillStyle = '#050514';
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = 'rgba(63,210,255,0.08)';
+    for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+    for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#3fd2ff';
+    ctx.shadowColor = '#3fd2ff';
+    ctx.shadowBlur = 10;
+    ctx.font = 'bold 26px monospace';
+    ctx.fillText('ELIGE TU NAVE', W / 2, 70);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#ff3f6e';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText('☠ modo survivor: 1 toque = muerte', W / 2, 96);
+
+    // Modelos (2x2)
+    const models = Object.keys(this.SHIP_SHAPES);
+    models.forEach((m, i) => {
+      const col = i % 2, row = Math.floor(i / 2);
+      const bx = 52 + col * 140, by = 130 + row * 130, bw = 116, bh = 110;
+      const sel = m === this.shipModel;
+      ctx.fillStyle = sel ? 'rgba(63,210,255,0.15)' : 'rgba(255,255,255,0.04)';
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.strokeStyle = sel ? '#3fd2ff' : '#333350';
+      ctx.lineWidth = sel ? 3 : 1.5;
+      ctx.strokeRect(bx, by, bw, bh);
+      const img = this._saveShipPreview(m, this.shipColor, 4.4);
+      ctx.drawImage(img, bx + bw / 2 - img.width / 2, by + 12);
+      ctx.fillStyle = sel ? '#3fd2ff' : '#888';
+      ctx.font = 'bold 12px monospace';
+      ctx.fillText(this.SHIP_SHAPES[m].name, bx + bw / 2, by + bh - 12);
+      this._uiHits.push({ x: bx, y: by, w: bw, h: bh, fn: () => { this.shipModel = m; this._bakePlayerSprite(); } });
+    });
+
+    // Colores
+    ctx.fillStyle = '#aaa';
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText('COLOR', W / 2, 410);
+    this.SHIP_COLORS.forEach((c, i) => {
+      const sw = 34, gap = 8;
+      const totalW = this.SHIP_COLORS.length * (sw + gap) - gap;
+      const bx = (W - totalW) / 2 + i * (sw + gap), by = 422;
+      ctx.fillStyle = c;
+      ctx.fillRect(bx, by, sw, 26);
+      if (i === this.shipColor) {
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(bx - 2, by - 2, sw + 4, 30);
+      }
+      this._uiHits.push({ x: bx, y: by - 4, w: sw, h: 34, fn: () => { this.shipColor = i; this._bakePlayerSprite(); } });
+    });
+
+    // Botón jugar
+    const pbx = W / 2 - 90, pby = 490, pbw = 180, pbh = 52;
+    ctx.fillStyle = 'rgba(63,255,142,0.15)';
+    ctx.fillRect(pbx, pby, pbw, pbh);
+    ctx.strokeStyle = '#3fff8e';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(pbx, pby, pbw, pbh);
+    ctx.fillStyle = '#3fff8e';
+    ctx.shadowColor = '#3fff8e';
+    ctx.shadowBlur = 8;
+    ctx.font = 'bold 20px monospace';
+    ctx.fillText('▶ JUGAR', W / 2, pby + 33);
+    ctx.shadowBlur = 0;
+    this._uiHits.push({ x: pbx, y: pby, w: pbw, h: pbh, fn: () => this._startRun() });
+
+    ctx.fillStyle = '#666';
+    ctx.font = '10px monospace';
+    ctx.fillText('teclas: 1-4 nave · ←→ color · ENTER jugar', W / 2, 570);
+  }
+
+  /* ---------------- Pantalla: mejora entre stages ---------------- */
+
+  _renderUpgrade(ctx, theme) {
+    const { W, H } = this;
+    if (!this.upgradeChoices) return;
+    this._uiHits = [];
+    ctx.fillStyle = 'rgba(0,0,10,0.82)';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = theme.accent;
+    ctx.shadowColor = theme.accent;
+    ctx.shadowBlur = 10;
+    ctx.font = 'bold 24px monospace';
+    ctx.fillText('STAGE ' + (this.stage - 1) + ' COMPLETO', W / 2, 80);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 14px monospace';
+    ctx.fillText('ELIGE UNA MEJORA', W / 2, 112);
+    if (this.stage % 3 === 0) {
+      ctx.fillStyle = '#ff4f5e';
+      ctx.font = 'bold 12px monospace';
+      ctx.fillText('⚠ después de esto: MINI-BOSS ⚠', W / 2, 134);
+    }
+
+    // Cartas de mejora
+    this.upgradeChoices.forEach((up, i) => {
+      const bx = 40, by = 155 + i * 92, bw = W - 80, bh = 78;
+      ctx.fillStyle = 'rgba(63,210,255,0.08)';
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.strokeStyle = theme.accent;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(bx, by, bw, bh);
+      ctx.textAlign = 'left';
+      ctx.font = '26px monospace';
+      ctx.fillText(up.icon, bx + 14, by + 47);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 16px monospace';
+      ctx.fillText((i + 1) + '. ' + up.name, bx + 56, by + 34);
+      ctx.fillStyle = '#9fd8ff';
+      ctx.font = '11px monospace';
+      ctx.fillText(up.desc, bx + 56, by + 54);
+      this._uiHits.push({ x: bx, y: by, w: bw, h: bh, fn: () => this._chooseUpgrade(up) });
+    });
+
+    // Personalización: color y forma (gratis, es tu nave)
+    ctx.textAlign = 'center';
+    const cy = 155 + this.upgradeChoices.length * 92 + 14;
+    const half = (W - 100) / 2;
+    const btn = (bx, label, fn) => {
+      ctx.fillStyle = 'rgba(255,255,255,0.06)';
+      ctx.fillRect(bx, cy, half, 40);
+      ctx.strokeStyle = '#555577';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(bx, cy, half, 40);
+      ctx.fillStyle = '#ccc';
+      ctx.font = 'bold 12px monospace';
+      ctx.fillText(label, bx + half / 2, cy + 25);
+      this._uiHits.push({ x: bx, y: cy, w: half, h: 40, fn });
+    };
+    btn(40, '🎨 COLOR (C)', () => { this.shipColor = (this.shipColor + 1) % this.SHIP_COLORS.length; this._bakePlayerSprite(); });
+    btn(60 + half, '🛸 FORMA (V)', () => this._cycleModel());
+    // Preview de la nave actual
+    const img = this.sprites.player[0];
+    ctx.drawImage(img, W / 2 - img.width / 2, cy + 52);
   }
 }

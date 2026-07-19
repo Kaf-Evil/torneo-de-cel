@@ -80,6 +80,7 @@
       currentGame = new SurvivorGame(canvas, { onGameOver: handleGameOver });
     }
     currentGame.start();
+    window.TDC_game = currentGame; // referencia para debug/tests
   }
 
   /* ---------------- Selección de carta (penales) ---------------- */

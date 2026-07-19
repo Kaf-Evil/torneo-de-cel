@@ -1,17 +1,23 @@
 /* ============================================================
- * TORNEO DE CEL — penales.js (v0.2 "street edition")
- * Modo Penales arcade con escenario callejero, carta de jugador
- * estilo FIFA (los stats afectan el gameplay) y HUD estilo Doom:
- * la cara del jugador vive abajo, se tensa al tirar, sonríe con
- * gol y llora si falla.
+ * TORNEO DE CEL — penales.js (v0.3 "timing edition")
+ * Modo Penales arcade con doble aguja de timing:
  *
- * Flujo por penal: AIM → POWER → SHOT → RESULT
+ * Flujo por penal: POWER → SIDE → SHOT → RESULT
+ *   1. POTENCIA: una aguja barre un medidor con colores
+ *      (rojo|naranja|amarillo|VERDE centro). Parar en el verde
+ *      del centro = disparo perfecto. Pasarse de centro = tiro
+ *      ALTO, quedarse corto = tiro RASO.
+ *   2. LADO: la misma mecánica, pero la flecha barre el ancho
+ *      de la portería y define a dónde va el balón. Las esquinas
+ *      dan bonus… y el extremo total es palo/fuera.
+ *   El portero SE MUEVE por la portería antes del disparo para
+ *   desconcentrar: si tiras cerca de donde está, te la ataja.
  *
  * Efecto de los stats de la carta:
  *   POT → el portero ataja menos tus tiros fuertes
- *   PRE → ventana de tiro "perfect" más ancha
- *   SER → barra de potencia más lenta (menos presión de timing)
- *   PIC → el portero predice menos tu lado
+ *   PRE → zona verde (perfect) más ancha
+ *   SER → la aguja de potencia barre más lento
+ *   PIC → el portero predice menos tu lado y se mueve más lento
  * ============================================================ */
 
 'use strict';
@@ -33,10 +39,10 @@ class PenalesGame {
 
     // ---- Stats de la carta → parámetros de gameplay ----
     const s = this.player.stats;
-    this.winLo = Math.max(72, 85 - Math.round((s.PRE - 60) / 3)); // PRE 60→85, 93→74
+    this.greenHW = 6 + (s.PRE - 60) / 4;       // semiancho de la zona verde (PRE 60→6, 93→14)
     this.potFactor = 1 - (s.POT - 60) / 250;   // multiplica prob. de atajada
-    this.serFactor = 1 + (s.SER - 60) / 250;   // multiplica periodo de la barra
-    this.picFactor = 1 - (s.PIC - 60) / 200;   // multiplica predicción del portero
+    this.serFactor = 1 + (s.SER - 60) / 250;   // multiplica periodo de la aguja de potencia
+    this.picFactor = 1 - (s.PIC - 60) / 200;   // multiplica predicción y velocidad del portero
 
     // ---- Escenografía precalculada (determinista, no parpadea) ----
     this.buildings = [
@@ -91,14 +97,18 @@ class PenalesGame {
     this.particles = [];
     this.best = TDCStorage.get('tdc_best_penales', 0);
 
-    this.state = 'aim';
+    this.state = 'power';        // power → side → shot → result
     this.sel = { col: 1, row: 0 };
-    this.power = 0;
-    this.powerT = 0;
-    this._powerArmedAt = 0;
+    this.needleV = 0;            // valor 0..100 de la aguja activa
+    this.needleT = 0;
+    this.powerVal = null;        // valor donde se paró la aguja de potencia
+    this.powerQuality = null;    // perfect | good | weak | wild
+    this.sideVal = null;
+    this._armedAt = performance.now();
     this.shotT = 0;
     this.resultT = 0;
     this.animT = 0;
+    this.keeperPhase = Math.random() * Math.PI * 2; // fase del vaivén del portero
     this.currentShot = null;
     this._reported = false;
     this.ball = { x: this.W / 2, y: 478 };
@@ -110,31 +120,20 @@ class PenalesGame {
   _bindInput() {
     this._onPointer = (e) => {
       e.preventDefault();
-      const p = this._pos(e);
-      if (this.state === 'aim') {
-        const z = this._zoneAt(p.x, p.y);
-        if (z) { this.sel = z; this._confirmAim(); }
-      } else if (this.state === 'power') {
-        if (performance.now() - this._powerArmedAt > 200) this._lockPower();
-      }
+      this._lockNeedle();
     };
     this._onKey = (e) => {
-      if (this.state === 'aim') {
-        const n = parseInt(e.key, 10);
-        if (n >= 1 && n <= 6) {
-          this.sel = { col: (n - 1) % 3, row: n <= 3 ? 0 : 1 };
-          this._confirmAim();
-        } else if (e.key === 'ArrowLeft') this.sel.col = Math.max(0, this.sel.col - 1);
-        else if (e.key === 'ArrowRight') this.sel.col = Math.min(2, this.sel.col + 1);
-        else if (e.key === 'ArrowUp') this.sel.row = 0;
-        else if (e.key === 'ArrowDown') this.sel.row = 1;
-        else if (e.key === 'Enter' || e.key === ' ') this._confirmAim();
-      } else if (this.state === 'power') {
-        if (e.key === 'Enter' || e.key === ' ') this._lockPower();
-      }
+      if (e.key === 'Enter' || e.key === ' ') this._lockNeedle();
     };
     this.canvas.addEventListener('pointerdown', this._onPointer);
     window.addEventListener('keydown', this._onKey);
+  }
+
+  /* Un solo botón: para la aguja del estado activo (con anti-doble-tap) */
+  _lockNeedle() {
+    if (performance.now() - this._armedAt < 220) return;
+    if (this.state === 'power') this._lockPower();
+    else if (this.state === 'side') this._lockSide();
   }
 
   _unbindInput() {
@@ -166,23 +165,45 @@ class PenalesGame {
     return null;
   }
 
-  _confirmAim() {
-    this.state = 'power';
-    this.powerT = 0;
-    this._powerArmedAt = performance.now();
+  /* ---- Aguja 1: POTENCIA. Distancia al centro (50) = calidad.
+   * Pasarse del centro → tiro ALTO (row 0) · corto → RASO (row 1). */
+  _lockPower() {
+    const v = this.needleV;
+    const dist = Math.abs(v - 50);
+    this.powerVal = v;
+    if (dist <= this.greenHW) this.powerQuality = 'perfect';
+    else if (dist <= 24) this.powerQuality = 'good';
+    else if (dist <= 38) this.powerQuality = 'weak';
+    else this.powerQuality = 'wild';
+    this.sel.row = v > 50 ? 0 : 1; // alto o raso
+    this.state = 'side';
+    this.needleT = 0;
+    this.needleV = 0;
+    this._armedAt = performance.now();
   }
 
-  _lockPower() {
-    this._resolveShot(this.sel.col, this.sel.row, this.power);
+  /* ---- Aguja 2: LADO. La flecha barre la portería. ---- */
+  _lockSide() {
+    const v = this.needleV;
+    this.sideVal = v;
+    let col = v < 33 ? 0 : v < 67 ? 1 : 2;
+    // Extremo total: se te fue (palo o fuera) aunque la potencia fuera buena
+    const extreme = v < 4 || v > 96;
+    this.sel.col = col;
+    this._resolveShot(col, this.sel.row, extreme);
   }
 
   /* ---------------- IA del portero ----------------
-   * Predicción base 25% +8% por gol de racha, reducida por la
-   * picardía (PIC) del jugador. Si no predice, se sesga hacia la
-   * columna que más usas (premia variar el tiro). */
-  _keeperGuess(shotCol) {
+   * Predicción base 22% +7% por gol de racha, reducida por PIC.
+   * ADEMÁS: el portero se está moviendo — si el tiro va cerca de
+   * donde está parado en ese momento, lo da por adivinado. */
+  _keeperGuess(shotCol, targetX) {
     const difficulty = Math.min(this.streak, 5);
-    const predictP = (0.25 + 0.08 * difficulty) * this.picFactor;
+    // ¿El vaivén lo dejó cerca del tiro? (leer al portero es skill)
+    if (Math.abs(this.keeper.x - targetX) < 48) {
+      return { col: shotCol, row: this.sel.row, near: true };
+    }
+    const predictP = (0.22 + 0.07 * difficulty) * this.picFactor;
     let col;
     if (Math.random() < predictP) {
       col = shotCol;
@@ -194,23 +215,16 @@ class PenalesGame {
       col = r < counts[0] ? 0 : r < counts[0] + counts[1] ? 1 : 2;
     }
     const row = Math.random() < 0.5 ? 0 : 1;
-    return { col, row };
+    return { col, row, near: false };
   }
 
-  /* ---------------- Resolución del tiro ----------------
-   * Calidad según potencia (la ventana perfect depende de PRE):
-   *   < 40         → weak
-   *   40..winLo    → good
-   *   winLo..95    → perfect
-   *   > 95         → wild (palo o fuera)                        */
-  _resolveShot(col, row, power) {
-    const keeper = this._keeperGuess(col);
-    let quality, result;
-
-    if (power > 95) quality = 'wild';
-    else if (power >= this.winLo) quality = 'perfect';
-    else if (power >= 40) quality = 'good';
-    else quality = 'weak';
+  /* ---------------- Resolución del tiro ---------------- */
+  _resolveShot(col, row, extremeSide) {
+    const zrTarget = this._zoneRect(col, row);
+    const targetX = zrTarget.x + zrTarget.w / 2;
+    const keeper = this._keeperGuess(col, targetX);
+    let quality = this.powerQuality, result;
+    if (extremeSide) quality = 'wild';
 
     if (quality === 'wild') {
       result = Math.random() < 0.6 ? 'post' : 'off';
@@ -244,7 +258,7 @@ class PenalesGame {
     }
 
     this.history.push(col);
-    this.currentShot = { col, row, power, quality, keeper, result, points };
+    this.currentShot = { col, row, power: this.powerVal, quality, keeper, result, points };
     this.shots.push(this.currentShot);
 
     // Preparar animación del balón y del portero
@@ -264,6 +278,7 @@ class PenalesGame {
     }
     const kzr = this._zoneRect(keeper.col, keeper.row);
     this._keeperTo = { x: kzr.x + kzr.w / 2, row: keeper.row };
+    this._keeperFrom = this.keeper.x; // se lanza desde donde lo agarró el vaivén
   }
 
   _spawnConfetti() {
@@ -294,20 +309,38 @@ class PenalesGame {
       if (p.life <= 0) this.particles.splice(i, 1);
     }
 
-    if (this.state === 'power') {
-      // Onda triangular; más racha → más rápida; SER la frena
+    // El portero se pasea por la línea ANTES del tiro (desconcentra
+    // y además define dónde lo agarra el disparo). PIC lo frena.
+    if (this.state === 'power' || this.state === 'side') {
       const difficulty = Math.min(this.streak, 5);
-      const period = Math.max(0.6, (1.2 - 0.08 * difficulty) * this.serFactor);
-      this.powerT += dt;
-      const phase = (this.powerT % period) / period;
-      this.power = (phase < 0.5 ? phase * 2 : (1 - phase) * 2) * 100;
+      const kSpeed = (1.4 + 0.25 * difficulty) * (2 - this.picFactor * 0.9);
+      this.keeperPhase += dt * kSpeed;
+      const range = this.goal.w / 2 - 28;
+      this.keeper.x = this.W / 2 + Math.sin(this.keeperPhase) * range;
+    }
+
+    if (this.state === 'power') {
+      // Aguja triangular; más racha → más rápida; SER la frena
+      const difficulty = Math.min(this.streak, 5);
+      const period = Math.max(0.55, (1.3 - 0.09 * difficulty) * this.serFactor);
+      this.needleT += dt;
+      const phase = (this.needleT % period) / period;
+      this.needleV = (phase < 0.5 ? phase * 2 : (1 - phase) * 2) * 100;
+    } else if (this.state === 'side') {
+      // Aguja de lado: un poco más rápida que la de potencia
+      const difficulty = Math.min(this.streak, 5);
+      const period = Math.max(0.5, 1.1 - 0.07 * difficulty);
+      this.needleT += dt;
+      const phase = (this.needleT % period) / period;
+      this.needleV = (phase < 0.5 ? phase * 2 : (1 - phase) * 2) * 100;
     } else if (this.state === 'shot') {
       this.shotT += dt;
       const t = Math.min(this.shotT / 0.55, 1);
       const ease = 1 - Math.pow(1 - t, 2);
       this.ball.x = this._ballFrom.x + (this._ballTo.x - this._ballFrom.x) * ease;
       this.ball.y = this._ballFrom.y + (this._ballTo.y - this._ballFrom.y) * ease;
-      this.keeper.x = this.W / 2 + (this._keeperTo.x - this.W / 2) * ease;
+      const kFrom = this._keeperFrom !== undefined ? this._keeperFrom : this.W / 2;
+      this.keeper.x = kFrom + (this._keeperTo.x - kFrom) * ease;
       this.keeper.y = this._keeperTo.row === 0 ? -32 * ease : 8 * ease;
       if (t >= 1) {
         this.state = 'result';
@@ -346,9 +379,16 @@ class PenalesGame {
       }
       return;
     }
-    this.state = 'aim';
+    this.state = 'power';
+    this.needleT = 0;
+    this.needleV = 0;
+    this.powerVal = null;
+    this.powerQuality = null;
+    this.sideVal = null;
+    this._armedAt = performance.now();
     this.ball = { x: this.W / 2, y: 478 };
     this.keeper = { x: this.W / 2, y: 0 };
+    this.keeperPhase = Math.random() * Math.PI * 2;
     this.currentShot = null;
   }
 
@@ -502,36 +542,25 @@ class PenalesGame {
     ctx.fillRect(g.x + g.w + 3, g.y - 5, 2, g.h + 10);
   }
 
-  /* ---- Zonas de tiro ---- */
+  /* ---- Zona objetivo en vivo (durante la aguja de lado) ---- */
   _drawZones(ctx) {
-    if (this.state !== 'aim' && this.state !== 'power') return;
-    for (let row = 0; row < this.ROWS; row++) {
-      for (let col = 0; col < this.COLS; col++) {
-        const r = this._zoneRect(col, row);
-        const isSel = this.sel.col === col && this.sel.row === row;
-        if (this.state === 'power' && !isSel) continue; // en power solo la elegida
-        const pulse = isSel ? 0.25 + 0.15 * Math.sin(this.animT * 6) : 0.07;
-        ctx.fillStyle = isSel ? `rgba(255,210,63,${pulse + 0.15})` : `rgba(63,210,255,${pulse})`;
-        ctx.fillRect(r.x + 3, r.y + 3, r.w - 6, r.h - 6);
-        ctx.strokeStyle = isSel ? '#ffd23f' : 'rgba(63,210,255,0.35)';
-        ctx.lineWidth = isSel ? 2 : 1;
-        ctx.strokeRect(r.x + 3, r.y + 3, r.w - 6, r.h - 6);
-        if (this.state === 'aim') {
-          ctx.fillStyle = 'rgba(255,255,255,0.6)';
-          ctx.font = 'bold 12px monospace';
-          ctx.textAlign = 'center';
-          ctx.fillText(String(row * 3 + col + 1), r.x + r.w / 2, r.y + r.h / 2 + 4);
-        }
-      }
-    }
+    if (this.state !== 'side') return;
+    // La flecha define la columna en vivo; la fila ya la definió la potencia
+    const liveCol = this.needleV < 33 ? 0 : this.needleV < 67 ? 1 : 2;
+    const r = this._zoneRect(liveCol, this.sel.row);
+    const pulse = 0.22 + 0.14 * Math.sin(this.animT * 8);
+    ctx.fillStyle = `rgba(255,210,63,${pulse})`;
+    ctx.fillRect(r.x + 3, r.y + 3, r.w - 6, r.h - 6);
+    ctx.strokeStyle = '#ffd23f';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(r.x + 3, r.y + 3, r.w - 6, r.h - 6);
   }
 
-  /* ---- Portero animado (idle: balanceo; dive: brazos extendidos) ---- */
+  /* ---- Portero animado (pre-tiro: se pasea; dive: brazos extendidos) ---- */
   _drawKeeper(ctx) {
-    const idle = this.state === 'aim' || this.state === 'power';
-    const sway = idle ? Math.sin(this.animT * 2.2) * 6 : 0;
-    const bob = idle ? Math.abs(Math.sin(this.animT * 4.4)) * 3 : 0;
-    const x = this.keeper.x + sway;
+    const idle = this.state === 'power' || this.state === 'side';
+    const bob = idle ? Math.abs(Math.sin(this.animT * 6)) * 3 : 0;
+    const x = this.keeper.x;
     const baseY = this.goal.y + this.goal.h;
     const top = baseY - 62 + this.keeper.y + bob;
 
@@ -664,15 +693,16 @@ class PenalesGame {
   /* ---- Mensajes centrales (instrucciones y resultado) ---- */
   _drawMessages(ctx) {
     ctx.textAlign = 'center';
-    if (this.state === 'aim') {
+    if (this.state === 'side') {
+      // Recordatorio de cómo quedó la potencia
+      const q = this.powerQuality;
+      const qCol = q === 'perfect' ? '#3fff8e' : q === 'good' ? '#ffd23f' : '#ff3f6e';
       ctx.fillStyle = 'rgba(0,0,0,0.45)';
-      ctx.fillRect(this.W / 2 - 130, 320, 260, 40);
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 15px monospace';
-      ctx.fillText('ELIGE TU ESQUINA', this.W / 2, 338);
-      ctx.fillStyle = '#9fd8ff';
-      ctx.font = '10px monospace';
-      ctx.fillText('tap en la zona · teclas 1-6', this.W / 2, 353);
+      ctx.fillRect(this.W / 2 - 110, 320, 220, 34);
+      ctx.fillStyle = qCol;
+      ctx.font = 'bold 13px monospace';
+      const qTxt = { perfect: 'POTENCIA PERFECTA', good: 'POTENCIA BUENA', weak: 'POTENCIA FLOJA', wild: 'POTENCIA SALVAJE' }[q];
+      ctx.fillText(qTxt + (this.sel.row === 0 ? ' · ALTO' : ' · RASO'), this.W / 2, 341);
     }
     if ((this.state === 'result' || this.state === 'over') && this.currentShot) {
       const s = this.currentShot;
@@ -694,34 +724,97 @@ class PenalesGame {
     }
   }
 
-  /* ---- Barra de potencia con ventana perfect según PRE ---- */
+  /* ---- Medidores de aguja ----
+   * POTENCIA: barra con zonas de color simétricas al centro
+   *   rojo | naranja | amarillo | VERDE | amarillo | naranja | rojo
+   * LADO: flecha que barre el ancho de la portería. */
   _drawPowerBar(ctx) {
-    if (this.state !== 'power') return;
-    const bx = 55, by = 515, bw = 250, bh = 20;
+    if (this.state === 'power') this._drawPowerMeter(ctx);
+    else if (this.state === 'side') this._drawSideMeter(ctx);
+  }
+
+  _drawPowerMeter(ctx) {
+    const bx = 45, by = 512, bw = 270, bh = 24;
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(bx - 6, by - 26, bw + 12, bh + 34);
-    ctx.fillStyle = '#20202e';
-    ctx.fillRect(bx, by, bw, bh);
-    // Segmentos: weak | good | perfect | wild
-    ctx.fillStyle = 'rgba(63,210,255,0.25)';
-    ctx.fillRect(bx + bw * 0.40, by, bw * (this.winLo - 40) / 100, bh);
-    ctx.fillStyle = 'rgba(255,210,63,0.75)';
-    ctx.fillRect(bx + bw * this.winLo / 100, by, bw * (95 - this.winLo) / 100, bh);
-    ctx.fillStyle = 'rgba(255,63,110,0.6)';
-    ctx.fillRect(bx + bw * 0.95, by, bw * 0.05, bh);
-    // Relleno actual
-    ctx.fillStyle = this.power > 95 ? '#ff3f6e' : this.power >= this.winLo ? '#ffd23f' : '#3fd2ff';
-    ctx.fillRect(bx, by, bw * this.power / 100, bh);
+    ctx.fillRect(bx - 6, by - 28, bw + 12, bh + 40);
+    // Zonas simétricas al centro (50): la verde depende de PRE
+    const seg = (from, to, col) => {
+      ctx.fillStyle = col;
+      ctx.fillRect(bx + bw * from / 100, by, bw * (to - from) / 100, bh);
+    };
+    const g = this.greenHW;
+    seg(0, 12, '#c22440');           // rojo (wild)
+    seg(12, 26, '#e07a30');          // naranja (weak)
+    seg(26, 50 - g, '#e8c33a');      // amarillo (good)
+    seg(50 - g, 50 + g, '#2ecc71');  // VERDE (perfect)
+    seg(50 + g, 74, '#e8c33a');
+    seg(74, 88, '#e07a30');
+    seg(88, 100, '#c22440');
+    // Marca central
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillRect(bx + bw / 2 - 1, by - 4, 2, bh + 8);
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 2;
     ctx.strokeRect(bx, by, bw, bh);
+    // Aguja (flecha)
+    const nx = bx + bw * this.needleV / 100;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(nx, by - 3);
+    ctx.lineTo(nx - 7, by - 14);
+    ctx.lineTo(nx + 7, by - 14);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillRect(nx - 1.5, by, 3, bh);
+    // Texto
     ctx.fillStyle = '#fff';
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('POTENCIA · para en el VERDE', this.W / 2, by - 18);
+    ctx.fillStyle = '#9fd8ff';
+    ctx.font = '9px monospace';
+    ctx.fillText('pasado = ALTO · corto = RASO · tap / espacio', this.W / 2, by + bh + 12);
+  }
+
+  _drawSideMeter(ctx) {
+    const g = this.goal;
+    const bx = g.x, bw = g.w, by = g.y - 26, bh = 10;
+    // Barra sobre el travesaño: esquinas doradas (bonus), extremo rojo (palo/fuera)
+    const seg = (from, to, col) => {
+      ctx.fillStyle = col;
+      ctx.fillRect(bx + bw * from / 100, by, bw * (to - from) / 100, bh);
+    };
+    seg(0, 4, '#c22440');
+    seg(4, 16, '#e8b33a');
+    seg(16, 84, 'rgba(63,210,255,0.55)');
+    seg(84, 96, '#e8b33a');
+    seg(96, 100, '#c22440');
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(bx, by, bw, bh);
+    // Flecha que barre el ancho de la portería
+    const nx = bx + bw * this.needleV / 100;
+    ctx.fillStyle = '#ffd23f';
+    ctx.beginPath();
+    ctx.moveTo(nx, by + bh + 12);
+    ctx.lineTo(nx - 8, by + bh + 2);
+    ctx.lineTo(nx + 8, by + bh + 2);
+    ctx.closePath();
+    ctx.fill();
+    // Texto
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(this.W / 2 - 120, 490, 240, 30);
+    ctx.fillStyle = '#ffd23f';
     ctx.font = 'bold 13px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('POTENCIA — tap / espacio', this.W / 2, by - 10);
+    ctx.fillText('EL LADO · ¡para la flecha!', this.W / 2, 503);
+    ctx.fillStyle = '#9fd8ff';
+    ctx.font = '9px monospace';
+    ctx.fillText('esquinas = bonus · extremo = palo/fuera', this.W / 2, 515);
   }
 
   /* ---- HUD estilo Doom: panel inferior con la cara reactiva ----
+   * La cara del jugador es el corazón emocional del HUD:
    * idle → parpadea · power/shot → tensa y suda ·
    * gol → sonríe · fallo → llora con lágrimas animadas. */
   _faceExpr() {
